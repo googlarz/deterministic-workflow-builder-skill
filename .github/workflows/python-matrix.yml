@@ -20,14 +20,18 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - run: python -m py_compile scripts/*.py
       - name: Verify sidecar registry hashes
-        run: python -c "
-          import hashlib, json, pathlib, sys;
-          registry = json.loads(pathlib.Path('assets/sidecar-registry.json').read_text());
-          errors = [];
-          [errors.append(f'{s[\"id\"]}: expected {s[\"prompt_sha256\"]} got {hashlib.sha256(pathlib.Path(s[\"prompt_asset\"]).read_bytes()).hexdigest()}')
-           for s in registry['sidecars']
-           if 'prompt_sha256' in s and hashlib.sha256(pathlib.Path(s['prompt_asset']).read_bytes()).hexdigest() != s['prompt_sha256']];
-          [print(f'MISMATCH: {e}', file=sys.stderr) for e in errors];
+        run: |
+          python3 << 'PYEOF'
+          import hashlib, json, pathlib, sys
+          registry = json.loads(pathlib.Path("assets/sidecar-registry.json").read_text())
+          errors = []
+          for s in registry["sidecars"]:
+              if "prompt_sha256" in s:
+                  actual = hashlib.sha256(pathlib.Path(s["prompt_asset"]).read_bytes()).hexdigest()
+                  if actual != s["prompt_sha256"]:
+                      errors.append(f'{s["id"]}: expected {s["prompt_sha256"]} got {actual}')
+          for e in errors:
+              print(f"MISMATCH: {e}", file=sys.stderr)
           sys.exit(1 if errors else 0)
-          "
+          PYEOF
       - run: python -m unittest discover -s tests -p 'test_*.py'
