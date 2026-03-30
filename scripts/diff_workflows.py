@@ -10,6 +10,9 @@ from pathlib import Path
 from workflow_schema import load_manifest, resolve_workflow_dir, simulate_step_order, summarize_sidecars
 
 
+STEP_DETAIL_FIELDS = ("type", "gate_type", "requires_approval", "retry_limit", "timeout_seconds")
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compare two deterministic workflows.")
     parser.add_argument("before", help="Old workflow directory or manifest path.")
@@ -35,7 +38,7 @@ def main(argv: list[str]) -> int:
         print("before:", ",".join(before_steps))
         print("after :", ",".join(after_steps))
     else:
-        print("Execution semantics unchanged.")
+        print("Step order unchanged.")
 
     added_steps = [step for step in after_steps if step not in before_steps]
     removed_steps = [step for step in before_steps if step not in after_steps]
@@ -43,6 +46,25 @@ def main(argv: list[str]) -> int:
         print("Added steps:", ", ".join(added_steps))
     if removed_steps:
         print("Removed steps:", ", ".join(removed_steps))
+
+    before_step_map = {step["id"]: step for step in before_manifest.get("steps", []) if isinstance(step, dict)}
+    after_step_map = {step["id"]: step for step in after_manifest.get("steps", []) if isinstance(step, dict)}
+    common_steps = set(before_step_map) & set(after_step_map)
+    detail_changes: list[str] = []
+    for step_id in sorted(common_steps):
+        before_step = before_step_map[step_id]
+        after_step = after_step_map[step_id]
+        for field in STEP_DETAIL_FIELDS:
+            before_val = before_step.get(field)
+            after_val = after_step.get(field)
+            if before_val != after_val:
+                detail_changes.append(f"  {step_id}.{field}: {before_val} -> {after_val}")
+    if detail_changes:
+        print("Step detail changes:")
+        for change in detail_changes:
+            print(change)
+    elif common_steps:
+        print("Step details unchanged for common steps.")
 
     if before_sidecars != after_sidecars:
         print("Sidecar changes:")

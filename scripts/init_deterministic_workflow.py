@@ -14,28 +14,7 @@ import sys
 from inspect import cleandoc
 from pathlib import Path
 
-from workflow_schema import SCHEMA_VERSION
-
-
-DEFAULT_ALLOWLISTED_COMMANDS = [
-    "bash",
-    "cat",
-    "cp",
-    "echo",
-    "find",
-    "git",
-    "grep",
-    "jq",
-    "mkdir",
-    "mv",
-    "python3",
-    "rm",
-    "sed",
-    "sleep",
-    "sort",
-    "touch",
-    "xargs",
-]
+from workflow_schema import DEFAULT_ALLOWLISTED_COMMANDS, SCHEMA_VERSION
 
 
 def slugify(value: str) -> str:
@@ -224,6 +203,10 @@ def build_runner(skill_home: Path | None = None) -> str:
         'if [[ ! -f "$CODEX_SKILL_HOME/scripts/run_workflow.py" ]]; then\n'
         '  CODEX_SKILL_HOME="$DEFAULT_SKILL_HOME"\n'
         'fi\n'
+        'if [[ ! -f "$CODEX_SKILL_HOME/scripts/run_workflow.py" ]]; then\n'
+        '  echo "ERROR: Cannot find run_workflow.py. Set CODEX_HOME or install the skill." >&2\n'
+        '  exit 2\n'
+        'fi\n'
         'exec python3 "$CODEX_SKILL_HOME/scripts/run_workflow.py" --workflow-dir "$ROOT_DIR" "$@"\n'
     )
 
@@ -278,7 +261,7 @@ def scaffold(
     write_file(workflow_dir / "state" / "approval-records.jsonl", "")
     write_file(
         workflow_dir / "state" / "runtime-state.json",
-        json.dumps({"active_run_id": None, "steps": {}, "updated_at": None}, indent=2) + "\n",
+        json.dumps({"active_run_id": None, "steps": {}, "updated_at": ""}, indent=2) + "\n",
     )
     write_file(
         workflow_dir / "state" / "metrics.json",

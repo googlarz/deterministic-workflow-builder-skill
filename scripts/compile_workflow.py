@@ -310,13 +310,15 @@ def compile_workflow(request: str, output_root: Path, name: str | None = None) -
             }
         ]
         step["timeout_seconds"] = 1800
-        step["consumes"] = (
-            [{"type": "report", "path": "inputs/request-context.txt", "required": False}]
-            if step["id"] == manifest["steps"][0]["id"]
-            else [{"type": "file", "path": f"artifacts/{step['depends_on'][0]}.done", "required": True}]
-            if step["depends_on"]
-            else []
-        )
+        if step["id"] == manifest["steps"][0]["id"]:
+            step["consumes"] = [{"type": "report", "path": "inputs/request-context.txt", "required": False}]
+        elif step["depends_on"]:
+            step["consumes"] = [
+                {"type": "file", "path": f"artifacts/{dep}.done", "required": True}
+                for dep in step["depends_on"]
+            ]
+        else:
+            step["consumes"] = []
         step["rollback"] = {
             "script": f"steps/{step['id']}.rollback.sh",
             "when": "manual",

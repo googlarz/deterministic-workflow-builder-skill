@@ -59,15 +59,18 @@ def main(argv: list[str]) -> int:
     args = parse_args(argv)
     results = [score_benchmark(path) for path in sorted(BENCHMARK_DIR.glob("*.json"))]
     total = sum(result["score"] for result in results)
+    max_possible = len(results) * 100
     if args.json:
-        print(json.dumps({"results": results, "total_score": total}, indent=2))
+        print(json.dumps({"results": results, "total_score": total, "max_score": max_possible}, indent=2))
     else:
         for result in results:
             print(
                 f"{result['benchmark']}: score={result['score']} "
                 f"kind={result['kind']} errors={result['errors']} warnings={result['warnings']}"
             )
-        print(f"TOTAL {total}")
+        print(f"TOTAL {total}/{max_possible}")
+    if max_possible > 0 and any(result["score"] < 60 for result in results):
+        return 1
     return 0
 
 

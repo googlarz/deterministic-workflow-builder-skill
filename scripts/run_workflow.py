@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures
-import fcntl
 import hashlib
 import json
 import os
@@ -24,6 +23,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 import shlex
+
+try:
+    import fcntl
+except ImportError:
+    fcntl = None  # type: ignore[assignment]
 
 from workflow_schema import load_manifest, normalize_contract, resolve_workflow_dir, simulate_step_order, summarize_sidecars, validate_manifest
 
@@ -178,13 +182,15 @@ class WorkflowLock:
     def __enter__(self) -> "WorkflowLock":
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.handle = self.path.open("a+", encoding="utf-8")
-        fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
+        if fcntl is not None:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX)
         return self
 
     def __exit__(self, exc_type: object, exc: object, tb: object) -> None:
         if self.handle is None:
             return
-        fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
+        if fcntl is not None:
+            fcntl.flock(self.handle.fileno(), fcntl.LOCK_UN)
         self.handle.close()
         self.handle = None
 
@@ -733,6 +739,7 @@ def build_step_env(policy: dict[str, Any]) -> dict[str, str]:
     env_policy = policy.get("environment", {})
     allowed_env = env_policy.get("allowed_env")
     if not isinstance(allowed_env, list) or not allowed_env:
+        print("[runner] WARNING: No `allowed_env` in policy; step inherits full environment.", file=sys.stderr)
         return dict(os.environ)
     prefixes = [entry[:-1] for entry in allowed_env if isinstance(entry, str) and entry.endswith("*")]
     exact = {entry for entry in allowed_env if isinstance(entry, str) and not entry.endswith("*")}
@@ -1161,10 +1168,6 @@ def approve_step(
 
     mark_approval_status(paths, step_id, "approved")
     run_id, run_dir = detect_run_dir(paths)
-    if run_dir is None and audit_enabled(manifest, policy):
-        run_context = setup_run_audit(paths, manifest, policy)
-        run_id, run_dir = run_context.run_id, run_context.run_dir
-        finalize_run_audit(paths, manifest, run_context)
     record = {
         "timestamp": utc_now(),
         "step_id": step_id,
@@ -1336,6 +1339,10 @@ def main(argv: list[str]) -> int:
             if step is None:
                 print(f"Unknown step: {args.step}", file=sys.stderr)
                 return 1
+            current_status = read_tsv_state(paths.step_state_path).get(step["id"])
+            if current_status == "complete" and not args.dry_run:
+                print(f"Step {step['id']} is already complete. Use --reset first to re-run.", file=sys.stderr)
+                return 0
             run_context = setup_run_audit(paths, manifest, policy) if audit_enabled(manifest, policy) and not args.dry_run else RunContext(run_id=None, run_dir=None, dry_run=args.dry_run, metrics={"steps": {}})
             try:
                 if args.dry_run:

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -50,6 +51,10 @@ VALID_GATE_TYPES = {"artifact", "approval", "review", "test", "http", "json", "g
 SCRIPTED_STEP_TYPES = {"shell", "test", "transform", "publish", "sidecar-consume", "approval"}
 VALID_CONTRACT_TYPES = {"file", "json", "report"}
 VALID_VALIDATION_TYPES = {"file_exists", "path_absent", "json_required_keys", "log_contains", "command"}
+DEFAULT_ALLOWLISTED_COMMANDS = [
+    "bash", "cat", "cp", "echo", "find", "git", "grep", "jq",
+    "mkdir", "mv", "python3", "rm", "sed", "sleep", "sort", "touch", "xargs",
+]
 
 
 @dataclass
@@ -88,7 +93,7 @@ def _expect_type(
     allow_empty: bool = True,
 ) -> Any:
     value = container.get(field)
-    if not isinstance(value, expected):
+    if not isinstance(value, expected) or (expected is int and isinstance(value, bool)):
         _add_issue(issues, "error", path, f"`{field}` must be of type {expected.__name__}.")
         return None
     if not allow_empty and not value:
@@ -138,7 +143,7 @@ def _validate_contract_entry(
     if "sha256" in contract and (not isinstance(contract["sha256"], str) or len(contract["sha256"]) != 64):
         _add_issue(issues, "error", manifest_path, f"Step `{step_id}` contract path `{path_value}` has invalid `sha256`.")
     for size_field in ("min_size_bytes", "max_size_bytes"):
-        if size_field in contract and (not isinstance(contract[size_field], int) or contract[size_field] < 0):
+        if size_field in contract and (not isinstance(contract[size_field], int) or isinstance(contract[size_field], bool) or contract[size_field] < 0):
             _add_issue(issues, "error", manifest_path, f"Step `{step_id}` contract path `{path_value}` has invalid `{size_field}`.")
     if "retention" in contract and not isinstance(contract["retention"], dict):
         _add_issue(issues, "error", manifest_path, f"Step `{step_id}` contract path `{path_value}` must use object `retention` metadata.")
@@ -224,7 +229,7 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: Path, workflow_di
             migrations = _expect_type(issues, manifest_path, manifest, "migrations", dict)
             if isinstance(migrations, dict):
                 current_from = migrations.get("current_from")
-                if current_from is not None and not isinstance(current_from, int):
+                if current_from is not None and (not isinstance(current_from, int) or isinstance(current_from, bool)):
                     _add_issue(issues, "error", manifest_path, "`migrations.current_from` must be an integer when provided.")
 
     failure_policy = _expect_type(issues, manifest_path, manifest, "failure_policy", dict)
@@ -238,7 +243,7 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: Path, workflow_di
                 f"`failure_policy.on_error` must be one of {sorted(VALID_FAILURE_POLICIES)}.",
             )
         retries = failure_policy.get("max_retries")
-        if not isinstance(retries, int) or retries < 0:
+        if not isinstance(retries, int) or isinstance(retries, bool) or retries < 0:
             _add_issue(issues, "error", manifest_path, "`failure_policy.max_retries` must be a non-negative integer.")
 
     audit = _expect_type(issues, manifest_path, manifest, "audit", dict)
@@ -286,7 +291,7 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: Path, workflow_di
             if not isinstance(step.get("requires_approval"), bool):
                 _add_issue(issues, "error", manifest_path, f"Step `{step_id}` must have boolean `requires_approval`.")
             retry_limit = step.get("retry_limit")
-            if not isinstance(retry_limit, int) or retry_limit < 0:
+            if not isinstance(retry_limit, int) or isinstance(retry_limit, bool) or retry_limit < 0:
                 _add_issue(issues, "error", manifest_path, f"Step `{step_id}` must have non-negative integer `retry_limit`.")
             gate_type = step.get("gate_type")
             if gate_type not in VALID_GATE_TYPES:
@@ -297,7 +302,7 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: Path, workflow_di
                     f"Step `{step_id}` has invalid `gate_type` `{gate_type}`.",
                 )
             timeout_seconds = step.get("timeout_seconds")
-            if not isinstance(timeout_seconds, int) or timeout_seconds <= 0:
+            if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
                 _add_issue(
                     issues,
                     "error",
@@ -373,6 +378,20 @@ def validate_manifest(manifest: dict[str, Any], manifest_path: Path, workflow_di
             ordered = _topological_step_order(manifest)
             if len(ordered) != len(step_map):
                 _add_issue(issues, "error", manifest_path, "Workflow DAG contains a cycle or unreachable dependency chain.")
+
+        all_produced: dict[str, str] = {}
+        for step_id, step in step_map.items():
+            for entry in step.get("produces", []):
+                contract = normalize_contract(entry)
+                if contract and isinstance(contract.get("path"), str):
+                    all_produced[contract["path"]] = step_id
+        for step_id, step in step_map.items():
+            for entry in step.get("consumes", []):
+                contract = normalize_contract(entry)
+                if contract and isinstance(contract.get("path"), str) and contract.get("required", True):
+                    consumed_path = contract["path"]
+                    if consumed_path not in all_produced:
+                        _add_issue(issues, "warning", manifest_path, f"Step `{step_id}` consumes `{consumed_path}` which is not produced by any step.")
 
     sidecar_ids: set[str] = set()
     for index, sidecar in enumerate(sidecars, start=1):
@@ -450,9 +469,9 @@ def _topological_step_order(manifest: dict[str, Any]) -> list[str]:
 
     ready = sorted([step_id for step_id, degree in indegree.items() if degree == 0], key=lambda item: order_hint[item])
     result: list[str] = []
-    queue = ready[:]
+    queue = deque(ready)
     while queue:
-        current = queue.pop(0)
+        current = queue.popleft()
         result.append(current)
         for neighbour in sorted(edges.get(current, []), key=lambda item: order_hint[item]):
             indegree[neighbour] -= 1
