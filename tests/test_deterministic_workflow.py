@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import random
 import subprocess
 import tempfile
@@ -22,13 +23,14 @@ SECURITY_SCRIPT = SKILL_DIR / "scripts" / "security_audit.py"
 BENCHMARK_DIR = SKILL_DIR / "benchmarks"
 
 
-def run_command(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+def run_command(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         cwd=cwd,
         text=True,
         capture_output=True,
         check=False,
+        env=env,
     )
 
 
@@ -63,6 +65,29 @@ class DeterministicWorkflowTests(unittest.TestCase):
             verified = run_command("python3", str(VERIFY_SCRIPT), str(workflow_dir), "--simulate")
             self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
             self.assertIn("[SIMULATION] step_order=", verified.stdout)
+
+    def test_runner_uses_local_skill_fallback_when_global_skill_missing(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            result = run_command(
+                "python3",
+                str(INIT_SCRIPT),
+                "fallback-check",
+                "--path",
+                str(root),
+                "--steps",
+                "fetch",
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            workflow_dir = root / "fallback-check"
+            isolated_home = root / "isolated-home"
+            isolated_home.mkdir()
+            env = dict(os.environ)
+            env["HOME"] = str(isolated_home)
+            env["CODEX_HOME"] = str(isolated_home / ".codex-missing")
+            listed = run_command(str(workflow_dir / "run_workflow.sh"), "--list", env=env)
+            self.assertEqual(listed.returncode, 0, listed.stderr)
+            self.assertIn("01-fetch", listed.stdout)
 
     def test_failed_step_marks_failed_and_writes_log(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:

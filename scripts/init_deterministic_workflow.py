@@ -213,12 +213,17 @@ def build_step_script(step_name: str, index: int) -> str:
     ) + "\n"
 
 
-def build_runner() -> str:
+def build_runner(skill_home: Path | None = None) -> str:
+    resolved_skill_home = (skill_home or Path(__file__).resolve().parents[1]).resolve()
     return (
         "#!/usr/bin/env bash\n"
         "set -euo pipefail\n\n"
         'ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"\n'
+        f'DEFAULT_SKILL_HOME="{resolved_skill_home}"\n'
         'CODEX_SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/deterministic-workflow-builder"\n'
+        'if [[ ! -f "$CODEX_SKILL_HOME/scripts/run_workflow.py" ]]; then\n'
+        '  CODEX_SKILL_HOME="$DEFAULT_SKILL_HOME"\n'
+        'fi\n'
         'exec python3 "$CODEX_SKILL_HOME/scripts/run_workflow.py" --workflow-dir "$ROOT_DIR" "$@"\n'
     )
 
