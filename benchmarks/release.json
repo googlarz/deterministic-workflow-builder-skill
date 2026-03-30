@@ -1,0 +1,7 @@
+{
+  "request": "Build a deterministic release workflow to deploy the app after validation and approval.",
+  "expected_kind": "release",
+  "expected_steps": ["01-collect", "02-validate", "03-review", "04-publish", "05-verify"],
+  "expected_sidecars": ["approval-brief"],
+  "expected_policy_pack": "strict-prod"
+}

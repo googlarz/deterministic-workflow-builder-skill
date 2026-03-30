@@ -1,0 +1,7 @@
+{
+  "request": "Create and review landing page copy, but keep runtime deterministic and auditable.",
+  "expected_kind": "content-review",
+  "expected_steps": ["01-collect", "02-draft", "03-variants", "04-review", "05-publish"],
+  "expected_sidecars": ["content-variants", "approval-brief"],
+  "expected_policy_pack": "human-approval-heavy"
+}

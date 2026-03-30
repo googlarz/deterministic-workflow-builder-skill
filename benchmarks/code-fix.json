@@ -1,0 +1,7 @@
+{
+  "request": "Fix the failing CI test in the payment service and make the workflow deterministic.",
+  "expected_kind": "code-fix",
+  "expected_steps": ["01-collect", "02-reproduce", "03-candidate-fixes", "04-apply", "05-test", "06-review"],
+  "expected_sidecars": ["candidate-generation", "edge-case-discovery"],
+  "expected_policy_pack": "ai-sidecar-safe"
+}

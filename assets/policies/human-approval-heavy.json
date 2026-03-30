@@ -1,0 +1,30 @@
+{
+  "name": "human-approval-heavy",
+  "description": "Bias toward explicit review checkpoints and human sign-off.",
+  "failure_policy": {
+    "on_error": "stop",
+    "max_retries": 0
+  },
+  "execution": {
+    "max_parallel": 1,
+    "allow_skips": false
+  },
+  "approval": {
+    "required_for": ["review", "publish", "approval"],
+    "auto_use_once": true,
+    "require_reason": true
+  },
+  "environment": {
+    "network_mode": "inherit",
+    "allowed_working_directories": ["."],
+    "allowed_env": ["HOME", "PATH", "USER", "SHELL", "TMPDIR", "LANG", "LC_*", "CODEX_*"]
+  },
+  "tooling": {
+    "allowlisted_commands": ["bash", "cat", "cp", "echo", "find", "git", "grep", "jq", "mkdir", "mv", "python3", "rm", "sed", "sleep", "sort", "touch", "xargs"]
+  },
+  "audit": {
+    "enabled": true,
+    "record_env": true,
+    "record_commands": true
+  }
+}

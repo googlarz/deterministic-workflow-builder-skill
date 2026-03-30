@@ -1,0 +1,56 @@
+{
+  "sidecars": [
+    {
+      "id": "candidate-generation",
+      "kind": "prompt",
+      "prompt_asset": "assets/prompts/candidate-generation.prompt.md",
+      "prompt_sha256": "0eb11eb8990eac5e40b5652d71da3ee3eee152ccd6b4cf2e0f603b94d8ef647d",
+      "purpose": "Generate bounded implementation alternatives before deterministic validation.",
+      "containment_mode": "advisory-only",
+      "output_schema": {
+        "type": "object",
+        "required_keys": ["summary", "candidates"]
+      },
+      "validator": "json-object-required-keys"
+    },
+    {
+      "id": "approval-brief",
+      "kind": "prompt",
+      "prompt_asset": "assets/prompts/approval-brief.prompt.md",
+      "prompt_sha256": "d9a21a989786d5d35687d225e268d7143dc34fb7018a2de1ec4c3ec031f38e3e",
+      "purpose": "Summarize observable evidence for a human approval gate.",
+      "containment_mode": "approval-brief",
+      "output_schema": {
+        "type": "object",
+        "required_keys": ["summary", "evidence", "recommendation"]
+      },
+      "validator": "json-object-required-keys"
+    },
+    {
+      "id": "edge-case-discovery",
+      "kind": "prompt",
+      "prompt_asset": "assets/prompts/edge-case-discovery.prompt.md",
+      "prompt_sha256": "6d90f11a3687654d3ee753e0406323daf50c17fad66576d003e2227ff1393539",
+      "purpose": "Suggest edge cases that can be converted into deterministic tests.",
+      "containment_mode": "test-before-adopt",
+      "output_schema": {
+        "type": "object",
+        "required_keys": ["summary", "edge_cases"]
+      },
+      "validator": "json-object-required-keys"
+    },
+    {
+      "id": "content-variants",
+      "kind": "prompt",
+      "prompt_asset": "assets/prompts/content-variants.prompt.md",
+      "prompt_sha256": "80e01bea561a2dc8771df9f9b9815e9fcc44103e88405022e784c70fbbfb149a",
+      "purpose": "Generate bounded content variants prior to fixed selection or approval.",
+      "containment_mode": "human-selection",
+      "output_schema": {
+        "type": "object",
+        "required_keys": ["summary", "variants"]
+      },
+      "validator": "json-object-required-keys"
+    }
+  ]
+}

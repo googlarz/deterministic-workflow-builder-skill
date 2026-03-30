@@ -1,0 +1,4 @@
+interface:
+  display_name: "Deterministic Workflow Builder"
+  short_description: "Design fixed, auditable runtime workflows"
+  default_prompt: "Use $deterministic-workflow-builder to turn this into a deterministic workflow with a manifest, fixed step order, approval gates, and no AI runtime decisions."
