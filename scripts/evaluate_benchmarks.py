@@ -64,7 +64,11 @@ def main(argv: list[str]) -> int:
     total = sum(result["score"] for result in results)
     max_possible = len(results) * 100
     if args.json:
-        print(json.dumps({"results": results, "total_score": total, "max_score": max_possible}, indent=2))
+        print(
+            json.dumps(
+                {"results": results, "total_score": total, "max_score": max_possible}, indent=2
+            )
+        )
     else:
         for result in results:
             print(

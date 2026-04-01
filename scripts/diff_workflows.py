@@ -53,8 +53,12 @@ def main(argv: list[str]) -> int:
     if removed_steps:
         print("Removed steps:", ", ".join(removed_steps))
 
-    before_step_map = {step["id"]: step for step in before_manifest.get("steps", []) if isinstance(step, dict)}
-    after_step_map = {step["id"]: step for step in after_manifest.get("steps", []) if isinstance(step, dict)}
+    before_step_map = {
+        step["id"]: step for step in before_manifest.get("steps", []) if isinstance(step, dict)
+    }
+    after_step_map = {
+        step["id"]: step for step in after_manifest.get("steps", []) if isinstance(step, dict)
+    }
     common_steps = set(before_step_map) & set(after_step_map)
     detail_changes: list[str] = []
     for step_id in sorted(common_steps):

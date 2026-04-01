@@ -332,6 +332,58 @@ def append_text(path: Path, line: str) -> None:
         handle.write(line + "\n")
 
 
+def load_latest_approval_record(paths: WorkflowPaths, step_id: str) -> dict[str, Any] | None:
+    if not paths.approval_records_path.exists():
+        return None
+    latest: dict[str, Any] | None = None
+    for raw_line in paths.approval_records_path.read_text(encoding="utf-8").splitlines():
+        if not raw_line.strip():
+            continue
+        try:
+            payload = json.loads(raw_line)
+        except json.JSONDecodeError:
+            continue
+        if isinstance(payload, dict) and payload.get("step_id") == step_id:
+            latest = payload
+    return latest
+
+
+def attach_approval_to_run(paths: WorkflowPaths, run_context: RunContext, step_id: str) -> None:
+    if run_context.run_dir is None:
+        return
+    approval_record = load_latest_approval_record(paths, step_id)
+    record = {
+        "timestamp": utc_now(),
+        "step_id": step_id,
+        "approver": "",
+        "reason": "",
+        "change_ref": "",
+        "run_id": run_context.run_id or "",
+    }
+    if approval_record is not None:
+        record.update(
+            {
+                "timestamp": approval_record.get("timestamp", record["timestamp"]),
+                "approver": str(approval_record.get("approver", "")),
+                "reason": str(approval_record.get("reason", "")),
+                "change_ref": str(approval_record.get("change_ref", "")),
+            }
+        )
+
+    approval_line = (
+        f"APPROVED\t{step_id}\tapprover={record['approver']}\treason={record['reason']}"
+        f"\tchange_ref={record['change_ref']}"
+    )
+    approvals_log = run_context.run_dir / "approvals.log"
+    existing = approvals_log.read_text(encoding="utf-8") if approvals_log.exists() else ""
+    if approval_line not in existing:
+        append_text(approvals_log, approval_line)
+        append_jsonl(
+            run_context.run_dir / "events.jsonl",
+            {"timestamp": utc_now(), "event": "approval_used", **record},
+        )
+
+
 def next_run_dir(paths: WorkflowPaths) -> tuple[str, Path]:
     current = int(paths.run_counter_path.read_text(encoding="utf-8").strip() or "0")
     next_value = current + 1
@@ -875,7 +927,10 @@ def build_step_env(policy: dict[str, Any]) -> dict[str, str]:
     env_policy = policy.get("environment", {})
     allowed_env = env_policy.get("allowed_env")
     if not isinstance(allowed_env, list) or not allowed_env:
-        print("[runner] WARNING: No `allowed_env` in policy; step inherits full environment.", file=sys.stderr)
+        print(
+            "[runner] WARNING: No `allowed_env` in policy; step inherits full environment.",
+            file=sys.stderr,
+        )
         return dict(os.environ)
     prefixes = [
         entry[:-1] for entry in allowed_env if isinstance(entry, str) and entry.endswith("*")
@@ -1158,10 +1213,10 @@ def execute_single_step(
 
         if returncode == 0:
             mark_step_status(paths, step_id, "complete")
-            if should_require_approval(step, policy) and policy.get("approval", {}).get(
-                "auto_use_once", True
-            ):
-                mark_approval_status(paths, step_id, "used")
+            if should_require_approval(step, policy):
+                attach_approval_to_run(paths, run_context, step_id)
+                if policy.get("approval", {}).get("auto_use_once", True):
+                    mark_approval_status(paths, step_id, "used")
             update_runtime_step(
                 paths,
                 step_id,
@@ -1674,7 +1729,10 @@ def main(argv: list[str]) -> int:
                 return 1
             current_status = read_tsv_state(paths.step_state_path).get(step["id"])
             if current_status == "complete" and not args.dry_run:
-                print(f"Step {step['id']} is already complete. Use --reset first to re-run.", file=sys.stderr)
+                print(
+                    f"Step {step['id']} is already complete. Use --reset first to re-run.",
+                    file=sys.stderr,
+                )
                 return 0
             run_context = (
                 setup_run_audit(paths, manifest, policy)

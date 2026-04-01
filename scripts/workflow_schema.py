@@ -472,7 +472,11 @@ def validate_manifest(
                     f"Step `{step_id}` has invalid `gate_type` `{gate_type}`.",
                 )
             timeout_seconds = step.get("timeout_seconds")
-            if not isinstance(timeout_seconds, int) or isinstance(timeout_seconds, bool) or timeout_seconds <= 0:
+            if (
+                not isinstance(timeout_seconds, int)
+                or isinstance(timeout_seconds, bool)
+                or timeout_seconds <= 0
+            ):
                 _add_issue(
                     issues,
                     "error",
@@ -651,10 +655,19 @@ def validate_manifest(
         for step_id, step in step_map.items():
             for entry in step.get("consumes", []):
                 contract = normalize_contract(entry)
-                if contract and isinstance(contract.get("path"), str) and contract.get("required", True):
+                if (
+                    contract
+                    and isinstance(contract.get("path"), str)
+                    and contract.get("required", True)
+                ):
                     consumed_path = contract["path"]
                     if consumed_path not in all_produced:
-                        _add_issue(issues, "warning", manifest_path, f"Step `{step_id}` consumes `{consumed_path}` which is not produced by any step.")
+                        _add_issue(
+                            issues,
+                            "warning",
+                            manifest_path,
+                            f"Step `{step_id}` consumes `{consumed_path}` which is not produced by any step.",
+                        )
 
     sidecar_ids: set[str] = set()
     for index, sidecar in enumerate(sidecars, start=1):

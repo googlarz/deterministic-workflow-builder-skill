@@ -205,11 +205,11 @@ def build_runner(skill_home: Path | None = None) -> str:
         'CODEX_SKILL_HOME="${CODEX_HOME:-$HOME/.codex}/skills/deterministic-workflow-builder"\n'
         'if [[ ! -f "$CODEX_SKILL_HOME/scripts/run_workflow.py" ]]; then\n'
         '  CODEX_SKILL_HOME="$DEFAULT_SKILL_HOME"\n'
-        'fi\n'
+        "fi\n"
         'if [[ ! -f "$CODEX_SKILL_HOME/scripts/run_workflow.py" ]]; then\n'
         '  echo "ERROR: Cannot find run_workflow.py. Set CODEX_HOME or install the skill." >&2\n'
-        '  exit 2\n'
-        'fi\n'
+        "  exit 2\n"
+        "fi\n"
         'exec python3 "$CODEX_SKILL_HOME/scripts/run_workflow.py" --workflow-dir "$ROOT_DIR" "$@"\n'
     )
 
