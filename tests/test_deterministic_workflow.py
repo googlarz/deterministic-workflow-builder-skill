@@ -7,8 +7,8 @@ import subprocess
 import tempfile
 import time
 import unittest
+import zipfile
 from pathlib import Path
-
 
 SKILL_DIR = Path(__file__).resolve().parents[1]
 INIT_SCRIPT = SKILL_DIR / "scripts" / "init_deterministic_workflow.py"
@@ -20,10 +20,13 @@ DIFF_SCRIPT = SKILL_DIR / "scripts" / "diff_workflows.py"
 EVAL_SCRIPT = SKILL_DIR / "scripts" / "evaluate_benchmarks.py"
 MIGRATE_SCRIPT = SKILL_DIR / "scripts" / "migrate_workflow.py"
 SECURITY_SCRIPT = SKILL_DIR / "scripts" / "security_audit.py"
+PACKAGE_SCRIPT = SKILL_DIR / "scripts" / "package_skill.py"
 BENCHMARK_DIR = SKILL_DIR / "benchmarks"
 
 
-def run_command(*args: str, cwd: Path | None = None, env: dict[str, str] | None = None) -> subprocess.CompletedProcess[str]:
+def run_command(
+    *args: str, cwd: Path | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     return subprocess.run(
         args,
         cwd=cwd,
@@ -164,10 +167,14 @@ class DeterministicWorkflowTests(unittest.TestCase):
             self.assertEqual(completed.returncode, 0, completed.stderr)
 
             step_state = (workflow_dir / "state" / "step-status.tsv").read_text(encoding="utf-8")
-            approval_state = (workflow_dir / "state" / "approval-status.tsv").read_text(encoding="utf-8")
+            approval_state = (workflow_dir / "state" / "approval-status.tsv").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("01-review\tcomplete", step_state)
             self.assertIn("01-review\tused", approval_state)
-            approval_records = (workflow_dir / "state" / "approval-records.jsonl").read_text(encoding="utf-8")
+            approval_records = (workflow_dir / "state" / "approval-records.jsonl").read_text(
+                encoding="utf-8"
+            )
             self.assertIn("validated release checklist", approval_records)
 
             replay = run_command(str(workflow_dir / "run_workflow.sh"), "--replay", "run-0001")
@@ -246,10 +253,7 @@ class DeterministicWorkflowTests(unittest.TestCase):
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
             (workflow_dir / "steps" / "01-collect.sh").write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "sleep 2\n"
-                "echo done\n",
+                "#!/usr/bin/env bash\nset -euo pipefail\nsleep 2\necho done\n",
                 encoding="utf-8",
             )
             (workflow_dir / "steps" / "01-collect.sh").chmod(0o755)
@@ -321,14 +325,17 @@ class DeterministicWorkflowTests(unittest.TestCase):
             manifest_path = workflow_dir / "workflow.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["residual_nondeterminism"] = ["none"]
-            manifest["steps"][0]["success_gate"] = {"type": "file_exists", "path": "artifacts/01-collect.done"}
-            manifest["steps"][0]["produces"] = [{"type": "file", "path": "artifacts/01-collect.done", "required": True}]
+            manifest["steps"][0]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/01-collect.done",
+            }
+            manifest["steps"][0]["produces"] = [
+                {"type": "file", "path": "artifacts/01-collect.done", "required": True}
+            ]
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
             (workflow_dir / "steps" / "01-collect.sh").write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "echo forgot artifact\n",
+                "#!/usr/bin/env bash\nset -euo pipefail\necho forgot artifact\n",
                 encoding="utf-8",
             )
             (workflow_dir / "steps" / "01-collect.sh").chmod(0o755)
@@ -351,7 +358,9 @@ class DeterministicWorkflowTests(unittest.TestCase):
                 "collect,verify",
             )
             workflow_dir = root / "repair-flow"
-            (workflow_dir / "state" / "step-status.tsv").write_text("01-collect\trunning\n02-verify\tpending\n", encoding="utf-8")
+            (workflow_dir / "state" / "step-status.tsv").write_text(
+                "01-collect\trunning\n02-verify\tpending\n", encoding="utf-8"
+            )
 
             diagnosed = run_command(str(workflow_dir / "run_workflow.sh"), "--doctor")
             self.assertEqual(diagnosed.returncode, 0, diagnosed.stderr)
@@ -382,9 +391,16 @@ class DeterministicWorkflowTests(unittest.TestCase):
             manifest["steps"][0]["type"] = "file-exists"
             manifest["steps"][0]["script"] = ""
             manifest["steps"][0]["executor_config"] = {"path": "artifacts/seed.txt"}
-            manifest["steps"][0]["success_gate"] = {"type": "file_exists", "path": "artifacts/seed.txt"}
-            manifest["steps"][0]["produces"] = [{"type": "file", "path": "artifacts/seed.txt", "required": True}]
-            manifest["steps"][0]["validation_checks"] = [{"type": "file_exists", "path": "artifacts/seed.txt"}]
+            manifest["steps"][0]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/seed.txt",
+            }
+            manifest["steps"][0]["produces"] = [
+                {"type": "file", "path": "artifacts/seed.txt", "required": True}
+            ]
+            manifest["steps"][0]["validation_checks"] = [
+                {"type": "file_exists", "path": "artifacts/seed.txt"}
+            ]
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             (workflow_dir / "artifacts").mkdir(exist_ok=True)
             (workflow_dir / "artifacts" / "seed.txt").write_text("seed\n", encoding="utf-8")
@@ -409,8 +425,13 @@ class DeterministicWorkflowTests(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["residual_nondeterminism"] = ["none"]
             manifest["steps"][0]["retry_limit"] = 1
-            manifest["steps"][0]["success_gate"] = {"type": "file_exists", "path": "artifacts/01-collect.done"}
-            manifest["steps"][0]["produces"] = [{"type": "file", "path": "artifacts/01-collect.done", "required": True}]
+            manifest["steps"][0]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/01-collect.done",
+            }
+            manifest["steps"][0]["produces"] = [
+                {"type": "file", "path": "artifacts/01-collect.done", "required": True}
+            ]
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
             (workflow_dir / "steps" / "01-collect.sh").write_text(
@@ -419,10 +440,10 @@ class DeterministicWorkflowTests(unittest.TestCase):
                 "mkdir -p state artifacts\n"
                 "count_file=state/retry-count.txt\n"
                 "count=0\n"
-                "if [[ -f \"$count_file\" ]]; then count=$(cat \"$count_file\"); fi\n"
+                'if [[ -f "$count_file" ]]; then count=$(cat "$count_file"); fi\n'
                 "count=$((count + 1))\n"
-                "echo \"$count\" > \"$count_file\"\n"
-                "if [[ \"$count\" -eq 1 ]]; then\n"
+                'echo "$count" > "$count_file"\n'
+                'if [[ "$count" -eq 1 ]]; then\n'
                 "  echo first attempt fails >&2\n"
                 "  exit 1\n"
                 "fi\n"
@@ -454,12 +475,27 @@ class DeterministicWorkflowTests(unittest.TestCase):
             manifest["policy"] = {"execution": {"max_parallel": 2}}
             manifest["residual_nondeterminism"] = ["none"]
             manifest["steps"][1]["depends_on"] = []
-            manifest["steps"][0]["success_gate"] = {"type": "file_exists", "path": "artifacts/01-first.done"}
-            manifest["steps"][1]["success_gate"] = {"type": "file_exists", "path": "artifacts/02-second.done"}
-            manifest["steps"][2]["success_gate"] = {"type": "file_exists", "path": "artifacts/03-join.done"}
-            manifest["steps"][0]["produces"] = [{"type": "file", "path": "artifacts/01-first.done", "required": True}]
-            manifest["steps"][1]["produces"] = [{"type": "file", "path": "artifacts/02-second.done", "required": True}]
-            manifest["steps"][2]["produces"] = [{"type": "file", "path": "artifacts/03-join.done", "required": True}]
+            manifest["steps"][0]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/01-first.done",
+            }
+            manifest["steps"][1]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/02-second.done",
+            }
+            manifest["steps"][2]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/03-join.done",
+            }
+            manifest["steps"][0]["produces"] = [
+                {"type": "file", "path": "artifacts/01-first.done", "required": True}
+            ]
+            manifest["steps"][1]["produces"] = [
+                {"type": "file", "path": "artifacts/02-second.done", "required": True}
+            ]
+            manifest["steps"][2]["produces"] = [
+                {"type": "file", "path": "artifacts/03-join.done", "required": True}
+            ]
             manifest["steps"][2]["consumes"] = [
                 {"type": "file", "path": "artifacts/01-first.done", "required": True},
                 {"type": "file", "path": "artifacts/02-second.done", "required": True},
@@ -509,20 +545,24 @@ class DeterministicWorkflowTests(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["policy_pack"] = "offline-only"
             manifest["residual_nondeterminism"] = ["none"]
-            manifest["steps"][0]["success_gate"] = {"type": "file_exists", "path": "artifacts/01-collect.done"}
+            manifest["steps"][0]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/01-collect.done",
+            }
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
             (workflow_dir / "steps" / "01-collect.sh").write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "curl https://example.com >/dev/null\n",
+                "#!/usr/bin/env bash\nset -euo pipefail\ncurl https://example.com >/dev/null\n",
                 encoding="utf-8",
             )
             (workflow_dir / "steps" / "01-collect.sh").chmod(0o755)
 
             result = run_command(str(workflow_dir / "run_workflow.sh"), "--step", "01-collect")
             self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
-            self.assertIn("Offline policy blocks network commands", (workflow_dir / "logs" / "01-collect.log").read_text(encoding="utf-8"))
+            self.assertIn(
+                "Offline policy blocks network commands",
+                (workflow_dir / "logs" / "01-collect.log").read_text(encoding="utf-8"),
+            )
 
     def test_rollback_runs_on_failure_when_configured(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -547,8 +587,13 @@ class DeterministicWorkflowTests(unittest.TestCase):
                 "when": "on_failure",
                 "preconditions": ["artifacts/01-publish.done"],
             }
-            manifest["steps"][0]["success_gate"] = {"type": "file_exists", "path": "artifacts/01-publish.done"}
-            manifest["steps"][0]["produces"] = [{"type": "file", "path": "artifacts/01-publish.done", "required": True}]
+            manifest["steps"][0]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/01-publish.done",
+            }
+            manifest["steps"][0]["produces"] = [
+                {"type": "file", "path": "artifacts/01-publish.done", "required": True}
+            ]
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
             (workflow_dir / "steps" / "01-publish.sh").write_text(
@@ -562,9 +607,7 @@ class DeterministicWorkflowTests(unittest.TestCase):
             )
             (workflow_dir / "steps" / "01-publish.sh").chmod(0o755)
             (workflow_dir / "steps" / "01-publish.rollback.sh").write_text(
-                "#!/usr/bin/env bash\n"
-                "set -euo pipefail\n"
-                "rm -f artifacts/01-publish.done\n",
+                "#!/usr/bin/env bash\nset -euo pipefail\nrm -f artifacts/01-publish.done\n",
                 encoding="utf-8",
             )
             (workflow_dir / "steps" / "01-publish.rollback.sh").chmod(0o755)
@@ -616,9 +659,15 @@ class DeterministicWorkflowTests(unittest.TestCase):
                 "collect,verify",
             )
             workflow_dir = root / "corrupt-flow"
-            (workflow_dir / "state" / "step-status.tsv").write_text("broken-line-without-tab\n", encoding="utf-8")
-            (workflow_dir / "state" / "approval-status.tsv").write_text("also-broken\n", encoding="utf-8")
-            (workflow_dir / "state" / "runtime-state.json").write_text("{not json\n", encoding="utf-8")
+            (workflow_dir / "state" / "step-status.tsv").write_text(
+                "broken-line-without-tab\n", encoding="utf-8"
+            )
+            (workflow_dir / "state" / "approval-status.tsv").write_text(
+                "also-broken\n", encoding="utf-8"
+            )
+            (workflow_dir / "state" / "runtime-state.json").write_text(
+                "{not json\n", encoding="utf-8"
+            )
 
             diagnosed = run_command(str(workflow_dir / "run_workflow.sh"), "--doctor")
             self.assertEqual(diagnosed.returncode, 0, diagnosed.stderr)
@@ -705,8 +754,13 @@ class DeterministicWorkflowTests(unittest.TestCase):
             manifest_path = workflow_dir / "workflow.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             manifest["residual_nondeterminism"] = ["none"]
-            manifest["steps"][0]["success_gate"] = {"type": "file_exists", "path": "artifacts/01-collect.done"}
-            manifest["steps"][0]["produces"] = [{"type": "file", "path": "artifacts/01-collect.done", "required": True}]
+            manifest["steps"][0]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/01-collect.done",
+            }
+            manifest["steps"][0]["produces"] = [
+                {"type": "file", "path": "artifacts/01-collect.done", "required": True}
+            ]
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             script = workflow_dir / "steps" / "01-collect.sh"
             script.write_text(
@@ -726,7 +780,9 @@ class DeterministicWorkflowTests(unittest.TestCase):
 
             runs = run_command(str(workflow_dir / "run_workflow.sh"), "--list-runs")
             self.assertEqual(runs.returncode, 0, runs.stderr)
-            self.assertGreaterEqual(len([line for line in runs.stdout.splitlines() if line.strip()]), 3)
+            self.assertGreaterEqual(
+                len([line for line in runs.stdout.splitlines() if line.strip()]), 3
+            )
 
     def test_verifier_rejects_cyclic_dag(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -772,7 +828,9 @@ class DeterministicWorkflowTests(unittest.TestCase):
             self.assertEqual(manifest["schema_version"], 4)
             self.assertEqual(manifest["policy_pack"], "ai-sidecar-safe")
             self.assertIn("candidate-generation", sidecar_ids)
-            self.assertTrue((workflow_dir / "assets" / "prompts" / "candidate-generation.prompt.md").exists())
+            self.assertTrue(
+                (workflow_dir / "assets" / "prompts" / "candidate-generation.prompt.md").exists()
+            )
 
             sidecars = run_command(str(workflow_dir / "run_workflow.sh"), "--sidecars")
             self.assertEqual(sidecars.returncode, 0, sidecars.stderr)
@@ -780,7 +838,10 @@ class DeterministicWorkflowTests(unittest.TestCase):
 
     def test_benchmark_compiles_expected_shapes(self) -> None:
         for benchmark_path in sorted(BENCHMARK_DIR.glob("*.json")):
-            with self.subTest(benchmark=benchmark_path.name), tempfile.TemporaryDirectory() as temp_dir:
+            with (
+                self.subTest(benchmark=benchmark_path.name),
+                tempfile.TemporaryDirectory() as temp_dir,
+            ):
                 benchmark = json.loads(benchmark_path.read_text(encoding="utf-8"))
                 root = Path(temp_dir)
                 compiled = run_command(
@@ -803,7 +864,9 @@ class DeterministicWorkflowTests(unittest.TestCase):
                 self.assertEqual(sidecar_ids, benchmark["expected_sidecars"])
                 self.assertEqual(manifest["policy_pack"], benchmark["expected_policy_pack"])
 
-                verified = run_command("python3", str(VERIFY_SCRIPT), str(workflow_dir), "--simulate")
+                verified = run_command(
+                    "python3", str(VERIFY_SCRIPT), str(workflow_dir), "--simulate"
+                )
                 self.assertEqual(verified.returncode, 0, verified.stdout + verified.stderr)
                 self.assertIn("[SIMULATION] step_order=", verified.stdout)
 
@@ -869,6 +932,46 @@ class DeterministicWorkflowTests(unittest.TestCase):
             simulated = run_command(str(workflow_dir / "run_workflow.sh"), "--dry-run")
             self.assertEqual(simulated.returncode, 0, simulated.stderr)
             self.assertIn("WOULD RUN", simulated.stdout)
+
+    def test_package_skill_creates_installable_archive(self) -> None:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            output_dir = Path(temp_dir) / "dist"
+            packaged = run_command("python3", str(PACKAGE_SCRIPT), "--output-dir", str(output_dir))
+            self.assertEqual(packaged.returncode, 0, packaged.stderr)
+
+            archives = sorted(output_dir.glob("deterministic-workflow-builder-skill-v*.zip"))
+            self.assertEqual(len(archives), 1)
+            archive_path = archives[0]
+
+            with zipfile.ZipFile(archive_path) as archive:
+                names = set(archive.namelist())
+                self.assertIn("deterministic-workflow-builder/SKILL.md", names)
+                self.assertIn("deterministic-workflow-builder/README.md", names)
+                self.assertIn(
+                    "deterministic-workflow-builder/scripts/init_deterministic_workflow.py", names
+                )
+                self.assertIn(
+                    "deterministic-workflow-builder/tests/test_deterministic_workflow.py", names
+                )
+                archive.extractall(Path(temp_dir) / "extracted")
+
+            extracted_root = Path(temp_dir) / "extracted" / "deterministic-workflow-builder"
+            generated = run_command(
+                "python3",
+                str(extracted_root / "scripts" / "init_deterministic_workflow.py"),
+                "smoke-flow",
+                "--path",
+                str(Path(temp_dir) / "extracted"),
+                "--steps",
+                "collect",
+            )
+            self.assertEqual(generated.returncode, 0, generated.stderr)
+
+            listed = run_command(
+                str(Path(temp_dir) / "extracted" / "smoke-flow" / "run_workflow.sh"), "--list"
+            )
+            self.assertEqual(listed.returncode, 0, listed.stderr)
+            self.assertIn("01-collect", listed.stdout)
 
 
 if __name__ == "__main__":

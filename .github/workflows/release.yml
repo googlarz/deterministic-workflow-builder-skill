@@ -1,0 +1,50 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check ruff
+      - run: ruff check scripts tests
+      - run: ruff format --check scripts tests
+      - run: python -m py_compile scripts/*.py
+      - run: python -m unittest discover -s tests -p 'test_*.py'
+      - run: python scripts/package_skill.py --output-dir dist
+      - id: version
+        run: |
+          VERSION="$(cat VERSION)"
+          ASSET="dist/deterministic-workflow-builder-skill-v${VERSION}.zip"
+          echo "version=${VERSION}" >> "${GITHUB_OUTPUT}"
+          echo "asset=${ASSET}" >> "${GITHUB_OUTPUT}"
+          if [ ! -f "${ASSET}" ]; then
+            echo "Expected release asset ${ASSET} was not created." >&2
+            exit 1
+          fi
+          if [ "${GITHUB_REF_TYPE}" = "tag" ] && [ "${GITHUB_REF_NAME}" != "v${VERSION}" ]; then
+            echo "Git tag ${GITHUB_REF_NAME} does not match VERSION ${VERSION}." >&2
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v6
+        with:
+          name: deterministic-workflow-builder-release
+          path: ${{ steps.version.outputs.asset }}
+      - if: github.ref_type == 'tag'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" "${{ steps.version.outputs.asset }}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file CHANGELOG.md \
+            --verify-tag

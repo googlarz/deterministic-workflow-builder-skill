@@ -1,5 +1,9 @@
 # Deterministic Workflow Builder
 
+[![CI](https://github.com/googlarz/deterministic-workflow-builder-skill/actions/workflows/python-matrix.yml/badge.svg)](https://github.com/googlarz/deterministic-workflow-builder-skill/actions/workflows/python-matrix.yml)
+[![Release](https://img.shields.io/github/v/release/googlarz/deterministic-workflow-builder-skill?display_name=tag)](https://github.com/googlarz/deterministic-workflow-builder-skill/releases)
+[![License](https://img.shields.io/github/license/googlarz/deterministic-workflow-builder-skill)](https://github.com/googlarz/deterministic-workflow-builder-skill/blob/main/LICENSE)
+
 Build deterministic, auditable, repeatable workflows for Codex and Claude.
 
 This skill turns vague "make it deterministic" requests into a workflow package with:
@@ -99,6 +103,8 @@ deterministic-workflow-builder/
 
 ## Quick Start
 
+Install the skill by copying this folder into `.codex/skills/` or by downloading a release zip and extracting the `deterministic-workflow-builder/` directory into your skills directory.
+
 Create a scaffold:
 
 ```bash
@@ -133,11 +139,27 @@ Run and recover:
 ## Testing
 
 ```bash
+python3 -m pip install "ruff>=0.14,<0.15" "pre-commit>=4.3,<5"
+ruff check scripts tests
+ruff format --check scripts tests
 python3 -m py_compile scripts/*.py
 python3 -m unittest discover -s tests -p 'test_*.py'
 python3 scripts/evaluate_benchmarks.py
 python3 scripts/security_audit.py <workflow-dir>
+python3 scripts/package_skill.py --output-dir dist
+pre-commit run --all-files
 ```
+
+## Release
+
+Cut a release by updating [VERSION](./VERSION), updating [CHANGELOG.md](./CHANGELOG.md), and pushing a matching git tag:
+
+```bash
+git tag "v$(cat VERSION)"
+git push origin --tags
+```
+
+The release workflow packages the skill, uploads the zip artifact, and publishes a GitHub release for matching `v*` tags.
 
 ## Intended Use
 
@@ -149,3 +171,10 @@ Use this when you want:
 - safe hybrid workflows where AI only suggests and never decides
 
 See [SKILL.md](./SKILL.md) for the full Codex skill behavior.
+
+## Project Policies
+
+- License: [MIT](./LICENSE)
+- Contributing guide: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- Security policy: [SECURITY.md](./SECURITY.md)
+- Compatibility policy: [COMPATIBILITY.md](./COMPATIBILITY.md)

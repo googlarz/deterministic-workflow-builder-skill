@@ -167,15 +167,16 @@ def build_spec(workflow_name: str, steps: list[str]) -> str:
         "- Containment: n/a\n"
         "- Bulletproof prompt or skill: n/a\n\n"
         "Validation:\n"
-        "- Run `python \"$CODEX_HOME/skills/deterministic-workflow-builder/scripts/verify_workflow.py\" . --simulate`\n"
-        "- Run `python \"$CODEX_HOME/skills/deterministic-workflow-builder/scripts/lint_determinism.py\" .`\n"
+        '- Run `python "$CODEX_HOME/skills/deterministic-workflow-builder/scripts/verify_workflow.py" . --simulate`\n'
+        '- Run `python "$CODEX_HOME/skills/deterministic-workflow-builder/scripts/lint_determinism.py" .`\n'
         "- Run `./run_workflow.sh --dry-run`\n"
     )
 
 
 def build_step_script(step_name: str, index: int) -> str:
-    return cleandoc(
-        f"""
+    return (
+        cleandoc(
+            f"""
         #!/usr/bin/env bash
         set -euo pipefail
 
@@ -189,7 +190,9 @@ def build_step_script(step_name: str, index: int) -> str:
         echo "Update $ROOT_DIR/steps/{index:02d}-{step_name}.sh before running the full workflow." >&2
         exit 1
         """
-    ) + "\n"
+        )
+        + "\n"
+    )
 
 
 def build_runner(skill_home: Path | None = None) -> str:
@@ -246,7 +249,9 @@ def scaffold(
         write_file(destination, content, executable=True)
 
     write_file(workflow_dir / "WORKFLOW_SPEC.md", spec_override or build_spec(workflow_name, steps))
-    write_file(workflow_dir / "workflow.json", manifest_override or build_manifest(workflow_name, steps))
+    write_file(
+        workflow_dir / "workflow.json", manifest_override or build_manifest(workflow_name, steps)
+    )
     write_file(workflow_dir / "run_workflow.sh", build_runner(), executable=True)
     write_file(
         workflow_dir / "state" / "step-status.tsv",
@@ -309,7 +314,9 @@ def main(argv: list[str]) -> int:
         return 1
 
     print(f"[OK] Created deterministic workflow scaffold at {workflow_dir}")
-    print("[OK] Next: fill WORKFLOW_SPEC.md, update workflow.json, and replace each step stub before execution")
+    print(
+        "[OK] Next: fill WORKFLOW_SPEC.md, update workflow.json, and replace each step stub before execution"
+    )
     return 0
 
 

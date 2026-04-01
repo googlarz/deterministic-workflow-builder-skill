@@ -12,7 +12,6 @@ from pathlib import Path
 
 from init_deterministic_workflow import build_manifest, build_spec, scaffold, slugify
 
-
 SKILL_DIR = Path(__file__).resolve().parents[1]
 PROMPT_ASSET_DIR = SKILL_DIR / "assets" / "prompts"
 SIDECAR_REGISTRY_PATH = SKILL_DIR / "assets" / "sidecar-registry.json"
@@ -22,10 +21,30 @@ def choose_kind(request: str) -> str:
     text = request.lower()
     scoring = {
         "release": sum(token in text for token in ("release", "deploy", "publish", "ship")),
-        "code-fix": sum(token in text for token in ("bug", "fix", "failing", "test", "ci", "regression")),
-        "content-review": sum(token in text for token in ("copy", "content", "article", "landing page", "review", "approve")),
-        "etl": sum(token in text for token in ("csv", "json", "etl", "ingest", "transform", "export", "database", "table")),
-        "file-transform": sum(token in text for token in ("rename", "convert", "files", "folder", "batch", "directory")),
+        "code-fix": sum(
+            token in text for token in ("bug", "fix", "failing", "test", "ci", "regression")
+        ),
+        "content-review": sum(
+            token in text
+            for token in ("copy", "content", "article", "landing page", "review", "approve")
+        ),
+        "etl": sum(
+            token in text
+            for token in (
+                "csv",
+                "json",
+                "etl",
+                "ingest",
+                "transform",
+                "export",
+                "database",
+                "table",
+            )
+        ),
+        "file-transform": sum(
+            token in text
+            for token in ("rename", "convert", "files", "folder", "batch", "directory")
+        ),
     }
     best_kind = max(scoring, key=scoring.get)
     return best_kind if scoring[best_kind] > 0 else "generic"
@@ -311,7 +330,9 @@ def compile_workflow(request: str, output_root: Path, name: str | None = None) -
         ]
         step["timeout_seconds"] = 1800
         if step["id"] == manifest["steps"][0]["id"]:
-            step["consumes"] = [{"type": "report", "path": "inputs/request-context.txt", "required": False}]
+            step["consumes"] = [
+                {"type": "report", "path": "inputs/request-context.txt", "required": False}
+            ]
         elif step["depends_on"]:
             step["consumes"] = [
                 {"type": "file", "path": f"artifacts/{dep}.done", "required": True}
@@ -343,7 +364,9 @@ def compile_workflow(request: str, output_root: Path, name: str | None = None) -
         elif "candidate" in step_name or "variants" in step_name:
             step["type"] = "sidecar-consume"
             step["gate_type"] = "review"
-            step["validation_checks"].append({"type": "file_exists", "path": f"artifacts/{step['id']}.done"})
+            step["validation_checks"].append(
+                {"type": "file_exists", "path": f"artifacts/{step['id']}.done"}
+            )
 
     manifest_override = json.dumps(manifest, indent=2) + "\n"
     spec_override = (
@@ -356,7 +379,9 @@ def compile_workflow(request: str, output_root: Path, name: str | None = None) -
         + f"- Source request: `{request}`\n"
     )
     step_contents = {
-        f"{index:02d}-{step}.sh": build_compiled_step_script(f"{index:02d}-{step}", step, str(template["goal"]))
+        f"{index:02d}-{step}.sh": build_compiled_step_script(
+            f"{index:02d}-{step}", step, str(template["goal"])
+        )
         for index, step in enumerate(steps, start=1)
     }
     step_contents.update(
@@ -388,11 +413,17 @@ def compile_workflow(request: str, output_root: Path, name: str | None = None) -
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Compile a request into a deterministic workflow package.")
+    parser = argparse.ArgumentParser(
+        description="Compile a request into a deterministic workflow package."
+    )
     parser.add_argument("request", help="The user request to compile.")
-    parser.add_argument("--path", default=".", help="Output directory that will contain the workflow folder.")
+    parser.add_argument(
+        "--path", default=".", help="Output directory that will contain the workflow folder."
+    )
     parser.add_argument("--name", default=None, help="Optional workflow name override.")
-    parser.add_argument("--json", action="store_true", help="Emit JSON summary instead of plain text.")
+    parser.add_argument(
+        "--json", action="store_true", help="Emit JSON summary instead of plain text."
+    )
     return parser.parse_args(argv)
 
 

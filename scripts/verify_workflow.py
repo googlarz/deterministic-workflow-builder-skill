@@ -8,7 +8,14 @@ import json
 import sys
 from pathlib import Path
 
-from workflow_schema import Issue, load_manifest, resolve_workflow_dir, simulate_step_order, summarize_sidecars, validate_manifest
+from workflow_schema import (
+    Issue,
+    load_manifest,
+    resolve_workflow_dir,
+    simulate_step_order,
+    summarize_sidecars,
+    validate_manifest,
+)
 
 
 def print_issues(issues: list[Issue]) -> None:
@@ -21,7 +28,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Verify a deterministic workflow directory.")
     parser.add_argument("path", help="Workflow directory or a file inside it.")
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
-    parser.add_argument("--simulate", action="store_true", help="Print simulated step order and sidecar routing.")
+    parser.add_argument(
+        "--simulate", action="store_true", help="Print simulated step order and sidecar routing."
+    )
     return parser.parse_args(argv)
 
 
@@ -33,7 +42,11 @@ def main(argv: list[str]) -> int:
     try:
         manifest = load_manifest(manifest_path)
     except FileNotFoundError:
-        issues = [Issue(severity="error", message="Missing workflow.json manifest.", path=str(manifest_path))]
+        issues = [
+            Issue(
+                severity="error", message="Missing workflow.json manifest.", path=str(manifest_path)
+            )
+        ]
         if args.json:
             print(json.dumps([issue.to_dict() for issue in issues], indent=2))
         else:
@@ -50,9 +63,17 @@ def main(argv: list[str]) -> int:
     issues = validate_manifest(manifest, manifest_path, workflow_dir=workflow_dir)
     policy_pack = manifest.get("policy_pack")
     if isinstance(policy_pack, str):
-        policy_path = Path(__file__).resolve().parents[1] / "assets" / "policies" / f"{policy_pack}.json"
+        policy_path = (
+            Path(__file__).resolve().parents[1] / "assets" / "policies" / f"{policy_pack}.json"
+        )
         if not policy_path.exists():
-            issues.append(Issue(severity="error", message=f"Unknown policy pack `{policy_pack}`.", path=str(policy_path)))
+            issues.append(
+                Issue(
+                    severity="error",
+                    message=f"Unknown policy pack `{policy_pack}`.",
+                    path=str(policy_path),
+                )
+            )
 
     payload = {
         "workflow_dir": str(workflow_dir),

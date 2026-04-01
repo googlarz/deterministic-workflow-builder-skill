@@ -11,7 +11,6 @@ from pathlib import Path
 
 from workflow_schema import Issue, load_manifest, resolve_workflow_dir, validate_manifest
 
-
 DANGEROUS_PATTERNS = (
     (re.compile(r"curl\b.*\|\s*(bash|sh)"), "Remote script execution via curl pipe."),
     (re.compile(r"wget\b.*\|\s*(bash|sh)"), "Remote script execution via wget pipe."),
@@ -28,7 +27,11 @@ def collect_script_findings(workflow_dir: Path) -> list[Issue]:
         for line_no, line in enumerate(text.splitlines(), start=1):
             for pattern, message in DANGEROUS_PATTERNS:
                 if pattern.search(line):
-                    issues.append(Issue(severity="warning", message=message, path=str(script_path), line=line_no))
+                    issues.append(
+                        Issue(
+                            severity="warning", message=message, path=str(script_path), line=line_no
+                        )
+                    )
     return issues
 
 
@@ -38,12 +41,24 @@ def collect_manifest_findings(manifest: dict[str, object], workflow_dir: Path) -
     if isinstance(environment, dict):
         allowed_env = environment.get("allowed_env", [])
         if isinstance(allowed_env, list) and "*" in allowed_env:
-            issues.append(Issue(severity="warning", message="Wildcard allowed_env entry `*` weakens isolation.", path=str(workflow_dir / "workflow.json")))
+            issues.append(
+                Issue(
+                    severity="warning",
+                    message="Wildcard allowed_env entry `*` weakens isolation.",
+                    path=str(workflow_dir / "workflow.json"),
+                )
+            )
     tooling = manifest.get("tooling", {})
     if isinstance(tooling, dict):
         allowlisted_commands = tooling.get("allowlisted_commands", [])
         if isinstance(allowlisted_commands, list) and not allowlisted_commands:
-            issues.append(Issue(severity="warning", message="Empty command allowlist means shell steps are not command-restricted.", path=str(workflow_dir / "workflow.json")))
+            issues.append(
+                Issue(
+                    severity="warning",
+                    message="Empty command allowlist means shell steps are not command-restricted.",
+                    path=str(workflow_dir / "workflow.json"),
+                )
+            )
     return issues
 
 

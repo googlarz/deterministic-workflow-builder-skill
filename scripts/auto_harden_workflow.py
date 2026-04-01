@@ -10,7 +10,7 @@ from pathlib import Path
 
 from compile_workflow import choose_policy_pack, load_sidecar_registry
 from init_deterministic_workflow import DEFAULT_ALLOWLISTED_COMMANDS
-from workflow_schema import load_manifest, resolve_workflow_dir, simulate_step_order
+from workflow_schema import load_manifest, resolve_workflow_dir
 
 
 def infer_kind_from_steps(step_names: list[str]) -> str:
@@ -60,7 +60,9 @@ def harden_manifest(manifest: dict[str, object]) -> tuple[dict[str, object], lis
 
     manifest["schema_version"] = max(int(manifest.get("schema_version", 4)), 4)
     if "policy_pack" not in manifest:
-        kind = infer_kind_from_steps([str(step.get("name", "")) for step in steps if isinstance(step, dict)])
+        kind = infer_kind_from_steps(
+            [str(step.get("name", "")) for step in steps if isinstance(step, dict)]
+        )
         manifest["policy_pack"] = choose_policy_pack(kind, manifest.get("goal", ""))
         changes.append(f"Set policy_pack to {manifest['policy_pack']}")
     manifest.setdefault("policy", {})
@@ -73,7 +75,11 @@ def harden_manifest(manifest: dict[str, object]) -> tuple[dict[str, object], lis
     manifest.setdefault("migrations", {"current_from": None})
 
     order = [step["id"] for step in steps if isinstance(step, dict) and "id" in step]
-    seen_sidecars = {sidecar["id"] for sidecar in manifest.get("sidecars", []) if isinstance(sidecar, dict) and "id" in sidecar}
+    seen_sidecars = {
+        sidecar["id"]
+        for sidecar in manifest.get("sidecars", [])
+        if isinstance(sidecar, dict) and "id" in sidecar
+    }
     for index, step in enumerate(steps):
         if not isinstance(step, dict):
             continue
@@ -85,7 +91,9 @@ def harden_manifest(manifest: dict[str, object]) -> tuple[dict[str, object], lis
         step.setdefault("script", f"steps/{step['id']}.sh")
         step.setdefault("executor_config", {})
         step.setdefault("commands", [f"./{step['script']}"])
-        step.setdefault("validation_checks", [{"type": "file_exists", "path": f"artifacts/{step['id']}.done"}])
+        step.setdefault(
+            "validation_checks", [{"type": "file_exists", "path": f"artifacts/{step['id']}.done"}]
+        )
         step.setdefault("consumes", [])
         step.setdefault(
             "produces",

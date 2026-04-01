@@ -62,8 +62,13 @@ def migrate_manifest(manifest: dict[str, object]) -> tuple[dict[str, object], li
             step["produces"] = migrate_contracts(step.get("produces", []))
             step["consumes"] = migrate_contracts(step.get("consumes", []))
             if step.get("success_gate") in (None, "", "TODO"):
-                step["success_gate"] = {"type": "file_exists", "path": f"artifacts/{step['id']}.done"}
-            previous_step_id = step.get("id") if isinstance(step.get("id"), str) else previous_step_id
+                step["success_gate"] = {
+                    "type": "file_exists",
+                    "path": f"artifacts/{step['id']}.done",
+                }
+            previous_step_id = (
+                step.get("id") if isinstance(step.get("id"), str) else previous_step_id
+            )
 
     sidecars = manifest.get("sidecars", [])
     if isinstance(sidecars, list):
@@ -77,9 +82,13 @@ def migrate_manifest(manifest: dict[str, object]) -> tuple[dict[str, object], li
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Migrate a deterministic workflow manifest to the latest schema.")
+    parser = argparse.ArgumentParser(
+        description="Migrate a deterministic workflow manifest to the latest schema."
+    )
     parser.add_argument("path", help="Workflow directory or workflow.json path.")
-    parser.add_argument("--write", action="store_true", help="Write the migrated manifest back to workflow.json.")
+    parser.add_argument(
+        "--write", action="store_true", help="Write the migrated manifest back to workflow.json."
+    )
     return parser.parse_args(argv)
 
 

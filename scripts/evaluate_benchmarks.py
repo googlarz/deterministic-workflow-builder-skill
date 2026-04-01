@@ -12,7 +12,6 @@ from pathlib import Path
 from compile_workflow import compile_workflow
 from workflow_schema import load_manifest, validate_manifest
 
-
 SKILL_DIR = Path(__file__).resolve().parents[1]
 BENCHMARK_DIR = SKILL_DIR / "benchmarks"
 
@@ -22,7 +21,9 @@ def score_benchmark(benchmark_path: Path) -> dict[str, object]:
     with tempfile.TemporaryDirectory() as temp_dir:
         workflow_dir, kind = compile_workflow(benchmark["request"], Path(temp_dir))
         manifest = load_manifest(workflow_dir / "workflow.json")
-        issues = validate_manifest(manifest, workflow_dir / "workflow.json", workflow_dir=workflow_dir)
+        issues = validate_manifest(
+            manifest, workflow_dir / "workflow.json", workflow_dir=workflow_dir
+        )
         step_ids = [step["id"] for step in manifest["steps"]]
         sidecar_ids = [sidecar["id"] for sidecar in manifest["sidecars"]]
         errors = [issue for issue in issues if issue.severity == "error"]
@@ -50,7 +51,9 @@ def score_benchmark(benchmark_path: Path) -> dict[str, object]:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Evaluate compiler performance on golden benchmarks.")
+    parser = argparse.ArgumentParser(
+        description="Evaluate compiler performance on golden benchmarks."
+    )
     parser.add_argument("--json", action="store_true", help="Emit JSON instead of text.")
     return parser.parse_args(argv)
 

@@ -5,6 +5,20 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python -m pip install --disable-pip-version-check ruff pre-commit
+      - run: ruff check scripts tests
+      - run: ruff format --check scripts tests
+      - run: pre-commit run --all-files
+
   test:
     runs-on: ubuntu-latest
     permissions:
@@ -35,3 +49,17 @@ jobs:
           sys.exit(1 if errors else 0)
           PYEOF
       - run: python -m unittest discover -s tests -p 'test_*.py'
+
+  package-smoke:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - run: python scripts/package_skill.py --output-dir dist
+      - run: unzip -q dist/*.zip -d smoke-install
+      - run: python smoke-install/deterministic-workflow-builder/scripts/init_deterministic_workflow.py smoke-flow --path smoke-install --steps collect
+      - run: smoke-install/smoke-flow/run_workflow.sh --list

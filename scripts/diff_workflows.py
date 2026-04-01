@@ -7,7 +7,12 @@ import argparse
 import sys
 from pathlib import Path
 
-from workflow_schema import load_manifest, resolve_workflow_dir, simulate_step_order, summarize_sidecars
+from workflow_schema import (
+    load_manifest,
+    resolve_workflow_dir,
+    simulate_step_order,
+    summarize_sidecars,
+)
 
 
 STEP_DETAIL_FIELDS = ("type", "gate_type", "requires_approval", "retry_limit", "timeout_seconds")
@@ -32,7 +37,9 @@ def main(argv: list[str]) -> int:
     before_sidecars = [item["id"] for item in summarize_sidecars(before_manifest)]
     after_sidecars = [item["id"] for item in summarize_sidecars(after_manifest)]
 
-    print(f"Policy pack: {before_manifest.get('policy_pack')} -> {after_manifest.get('policy_pack')}")
+    print(
+        f"Policy pack: {before_manifest.get('policy_pack')} -> {after_manifest.get('policy_pack')}"
+    )
     if before_steps != after_steps:
         print("Execution semantics changed:")
         print("before:", ",".join(before_steps))

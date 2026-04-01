@@ -10,8 +10,8 @@ import sys
 from dataclasses import asdict, dataclass
 from pathlib import Path
 
-from workflow_schema import load_manifest as load_manifest_data, validate_manifest
-
+from workflow_schema import load_manifest as load_manifest_data
+from workflow_schema import validate_manifest
 
 SUBJECTIVE_PATTERNS = [
     re.compile(r"\binspect and decide\b", re.IGNORECASE),
@@ -47,7 +47,9 @@ class Finding:
     line: int | None = None
 
 
-def add_finding(findings: list[Finding], severity: str, path: Path, message: str, line: int | None = None) -> None:
+def add_finding(
+    findings: list[Finding], severity: str, path: Path, message: str, line: int | None = None
+) -> None:
     findings.append(Finding(severity=severity, file=str(path), message=message, line=line))
 
 
@@ -97,12 +99,29 @@ def scan_step_script(path: Path, findings: list[Finding]) -> None:
     for line_number, line in enumerate(lines, start=1):
         for pattern in SUBJECTIVE_PATTERNS:
             if pattern.search(line):
-                add_finding(findings, "error", path, "Subjective runtime wording is not deterministic.", line_number)
+                add_finding(
+                    findings,
+                    "error",
+                    path,
+                    "Subjective runtime wording is not deterministic.",
+                    line_number,
+                )
         for pattern in NONDETERMINISTIC_PATTERNS:
             if pattern.search(line):
-                add_finding(findings, "warning", path, "Potential nondeterministic runtime dependency detected.", line_number)
-        if any(pattern.search(line) for pattern in UNSORTED_TRAVERSAL_PATTERNS) and "sort" not in line:
-            add_finding(findings, "warning", path, "Filesystem traversal appears unsorted.", line_number)
+                add_finding(
+                    findings,
+                    "warning",
+                    path,
+                    "Potential nondeterministic runtime dependency detected.",
+                    line_number,
+                )
+        if (
+            any(pattern.search(line) for pattern in UNSORTED_TRAVERSAL_PATTERNS)
+            and "sort" not in line
+        ):
+            add_finding(
+                findings, "warning", path, "Filesystem traversal appears unsorted.", line_number
+            )
 
 
 def lint_workflow(workflow_dir: Path) -> list[Finding]:
@@ -126,12 +145,22 @@ def lint_workflow(workflow_dir: Path) -> list[Finding]:
 
     residual = manifest.get("residual_nondeterminism")
     if not isinstance(residual, list) or not residual:
-        add_finding(findings, "error", manifest_path, "Manifest must define residual_nondeterminism as a non-empty list.")
+        add_finding(
+            findings,
+            "error",
+            manifest_path,
+            "Manifest must define residual_nondeterminism as a non-empty list.",
+        )
 
     for step in manifest["steps"]:
         step_path = workflow_dir / step["script"]
         if step.get("success_gate") == "TODO":
-            add_finding(findings, "error", manifest_path, f"Step `{step['id']}` still has a TODO success gate.")
+            add_finding(
+                findings,
+                "error",
+                manifest_path,
+                f"Step `{step['id']}` still has a TODO success gate.",
+            )
         scan_step_script(step_path, findings)
 
     for sidecar in manifest.get("sidecars", []):
@@ -140,8 +169,17 @@ def lint_workflow(workflow_dir: Path) -> list[Finding]:
         containment = sidecar.get("containment", {})
         notes = containment.get("notes", "") if isinstance(containment, dict) else ""
         if isinstance(sidecar.get("when"), str) and not sidecar["when"].strip():
-            add_finding(findings, "error", manifest_path, f"Sidecar `{sidecar.get('id', '?')}` must describe `when`.")
-        if "pass" not in notes.lower() and "approval" not in notes.lower() and "proposal" not in notes.lower():
+            add_finding(
+                findings,
+                "error",
+                manifest_path,
+                f"Sidecar `{sidecar.get('id', '?')}` must describe `when`.",
+            )
+        if (
+            "pass" not in notes.lower()
+            and "approval" not in notes.lower()
+            and "proposal" not in notes.lower()
+        ):
             add_finding(
                 findings,
                 "warning",

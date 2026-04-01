@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 import re
+import shlex
 import shutil
 import stat
 import subprocess
@@ -22,15 +23,20 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-import shlex
 
 try:
     import fcntl
 except ImportError:
     fcntl = None  # type: ignore[assignment]
 
-from workflow_schema import load_manifest, normalize_contract, resolve_workflow_dir, simulate_step_order, summarize_sidecars, validate_manifest
-
+from workflow_schema import (
+    load_manifest,
+    normalize_contract,
+    resolve_workflow_dir,
+    simulate_step_order,
+    summarize_sidecars,
+    validate_manifest,
+)
 
 SENSITIVE_PATTERNS = (
     re.compile(r"(?i)(secret|token|password|apikey|api_key|private_key)=([^\s]+)"),
@@ -39,12 +45,72 @@ SENSITIVE_PATTERNS = (
 NETWORK_COMMANDS = {"curl", "wget", "http", "https", "ssh", "scp", "rsync", "nc", "telnet"}
 STATE_IO_LOCK = threading.Lock()
 SHELL_BUILTINS = {
-    ".", ":", "[", "[[", "alias", "bg", "bind", "break", "builtin", "cd", "command", "continue", "declare",
-    "dirs", "disown", "echo", "elif", "else", "enable", "eval", "exec", "exit", "export", "false", "fc", "fg",
-    "fi", "for", "function", "getopts", "hash", "help", "history", "if", "in", "jobs", "kill", "let", "local",
-    "logout", "popd", "printf", "pushd", "pwd", "read", "readonly", "return", "select", "set", "shift", "source",
-    "suspend", "test", "then", "times", "trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unset",
-    "until", "wait", "while",
+    ".",
+    ":",
+    "[",
+    "[[",
+    "alias",
+    "bg",
+    "bind",
+    "break",
+    "builtin",
+    "cd",
+    "command",
+    "continue",
+    "declare",
+    "dirs",
+    "disown",
+    "echo",
+    "elif",
+    "else",
+    "enable",
+    "eval",
+    "exec",
+    "exit",
+    "export",
+    "false",
+    "fc",
+    "fg",
+    "fi",
+    "for",
+    "function",
+    "getopts",
+    "hash",
+    "help",
+    "history",
+    "if",
+    "in",
+    "jobs",
+    "kill",
+    "let",
+    "local",
+    "logout",
+    "popd",
+    "printf",
+    "pushd",
+    "pwd",
+    "read",
+    "readonly",
+    "return",
+    "select",
+    "set",
+    "shift",
+    "source",
+    "suspend",
+    "test",
+    "then",
+    "times",
+    "trap",
+    "true",
+    "type",
+    "typeset",
+    "ulimit",
+    "umask",
+    "unalias",
+    "unset",
+    "until",
+    "wait",
+    "while",
 }
 
 
@@ -127,7 +193,10 @@ def deep_merge(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]
 def redact_text(text: str) -> str:
     redacted = text
     for pattern in SENSITIVE_PATTERNS:
-        redacted = pattern.sub(lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex == 2 else "[REDACTED]", redacted)
+        redacted = pattern.sub(
+            lambda match: f"{match.group(1)}=[REDACTED]" if match.lastindex == 2 else "[REDACTED]",
+            redacted,
+        )
     return redacted
 
 
@@ -155,7 +224,9 @@ def atomic_write_json(path: Path, payload: dict[str, Any]) -> None:
     atomic_write_text(path, json.dumps(payload, indent=2, sort_keys=True) + "\n")
 
 
-def read_json_file_with_errors(path: Path, default: dict[str, Any] | None = None) -> tuple[dict[str, Any], list[str]]:
+def read_json_file_with_errors(
+    path: Path, default: dict[str, Any] | None = None
+) -> tuple[dict[str, Any], list[str]]:
     if not path.exists():
         return default or {}, []
     try:
@@ -201,7 +272,9 @@ def ensure_state(paths: WorkflowPaths, manifest: dict[str, Any]) -> None:
     paths.audit_root.mkdir(parents=True, exist_ok=True)
     paths.lock_path.touch(exist_ok=True)
     if not paths.step_state_path.exists():
-        atomic_write_text(paths.step_state_path, "".join(f"{step['id']}\tpending\n" for step in manifest["steps"]))
+        atomic_write_text(
+            paths.step_state_path, "".join(f"{step['id']}\tpending\n" for step in manifest["steps"])
+        )
     if not paths.approval_state_path.exists():
         atomic_write_text(
             paths.approval_state_path,
@@ -211,7 +284,9 @@ def ensure_state(paths: WorkflowPaths, manifest: dict[str, Any]) -> None:
             ),
         )
     if not paths.runtime_state_path.exists():
-        atomic_write_json(paths.runtime_state_path, {"active_run_id": None, "steps": {}, "updated_at": utc_now()})
+        atomic_write_json(
+            paths.runtime_state_path, {"active_run_id": None, "steps": {}, "updated_at": utc_now()}
+        )
     if not paths.metrics_path.exists():
         atomic_write_json(paths.metrics_path, {"workflow_runs": 0, "steps": {}})
     if not paths.run_counter_path.exists():
@@ -326,7 +401,9 @@ def normalize_validation_checks(entries: list[Any]) -> list[dict[str, Any]]:
 
 
 def load_runtime_state(paths: WorkflowPaths) -> dict[str, Any]:
-    return read_json_file(paths.runtime_state_path, {"active_run_id": None, "steps": {}, "updated_at": utc_now()})
+    return read_json_file(
+        paths.runtime_state_path, {"active_run_id": None, "steps": {}, "updated_at": utc_now()}
+    )
 
 
 def write_runtime_state(paths: WorkflowPaths, payload: dict[str, Any]) -> None:
@@ -362,7 +439,9 @@ def update_runtime_step(paths: WorkflowPaths, step_id: str, payload: dict[str, A
         atomic_write_json(paths.runtime_state_path, payload)
 
 
-def setup_run_audit(paths: WorkflowPaths, manifest: dict[str, Any], policy: dict[str, Any]) -> RunContext:
+def setup_run_audit(
+    paths: WorkflowPaths, manifest: dict[str, Any], policy: dict[str, Any]
+) -> RunContext:
     run_id, run_dir = next_run_dir(paths)
     manifest_snapshot = run_dir / "workflow.snapshot.json"
     policy_snapshot = run_dir / "policy.snapshot.json"
@@ -375,7 +454,8 @@ def setup_run_audit(paths: WorkflowPaths, manifest: dict[str, Any], policy: dict
     atomic_write_text(sidecars_snapshot, json.dumps(summarize_sidecars(manifest), indent=2) + "\n")
     atomic_write_text(
         env_snapshot,
-        "\n".join(f"{key}={redact_text(str(value))}" for key, value in sorted(os.environ.items())) + "\n",
+        "\n".join(f"{key}={redact_text(str(value))}" for key, value in sorted(os.environ.items()))
+        + "\n",
     )
     for sidecar in manifest.get("sidecars", []):
         prompt_asset = sidecar.get("prompt_asset")
@@ -399,17 +479,32 @@ def setup_run_audit(paths: WorkflowPaths, manifest: dict[str, Any], policy: dict
             "prompt_assets": prompt_digests,
         },
     )
-    for snapshot_path in (manifest_snapshot, policy_snapshot, sidecars_snapshot, env_snapshot, run_dir / "digests.json"):
+    for snapshot_path in (
+        manifest_snapshot,
+        policy_snapshot,
+        sidecars_snapshot,
+        env_snapshot,
+        run_dir / "digests.json",
+    ):
         set_read_only(snapshot_path)
 
     runtime = load_runtime_state(paths)
     runtime["active_run_id"] = run_id
     write_runtime_state(paths, runtime)
-    update_metrics(paths, lambda payload: payload.__setitem__("workflow_runs", int(payload.get("workflow_runs", 0)) + 1))
-    return RunContext(run_id=run_id, run_dir=run_dir, dry_run=False, metrics={"steps": {}, "run_id": run_id})
+    update_metrics(
+        paths,
+        lambda payload: payload.__setitem__(
+            "workflow_runs", int(payload.get("workflow_runs", 0)) + 1
+        ),
+    )
+    return RunContext(
+        run_id=run_id, run_dir=run_dir, dry_run=False, metrics={"steps": {}, "run_id": run_id}
+    )
 
 
-def finalize_run_audit(paths: WorkflowPaths, manifest: dict[str, Any], run_context: RunContext) -> None:
+def finalize_run_audit(
+    paths: WorkflowPaths, manifest: dict[str, Any], run_context: RunContext
+) -> None:
     if run_context.run_dir is None:
         return
     atomic_write_json(run_context.run_dir / "metrics.json", run_context.metrics)
@@ -497,7 +592,11 @@ def list_runs(paths: WorkflowPaths) -> int:
 
 
 def detect_run_dir(paths: WorkflowPaths) -> tuple[str | None, Path | None]:
-    runs = sorted(path for path in paths.audit_root.iterdir() if path.is_dir()) if paths.audit_root.exists() else []
+    runs = (
+        sorted(path for path in paths.audit_root.iterdir() if path.is_dir())
+        if paths.audit_root.exists()
+        else []
+    )
     if not runs:
         return None, None
     latest = runs[-1]
@@ -532,7 +631,11 @@ def replay_run(paths: WorkflowPaths, run_id: str, simulate: bool = False) -> int
 
 def should_require_approval(step: dict[str, Any], policy: dict[str, Any]) -> bool:
     required_for = set(policy.get("approval", {}).get("required_for", []))
-    return bool(step.get("requires_approval")) or step.get("type") in required_for or step.get("name") in required_for
+    return (
+        bool(step.get("requires_approval"))
+        or step.get("type") in required_for
+        or step.get("name") in required_for
+    )
 
 
 def parse_success_gate(success_gate: Any) -> dict[str, Any]:
@@ -544,11 +647,11 @@ def parse_success_gate(success_gate: Any) -> dict[str, Any]:
         if lowered == "todo":
             return {"type": "noop"}
         if lowered.startswith("log contains "):
-            return {"type": "log_contains", "value": stripped[len("log contains "):]}
+            return {"type": "log_contains", "value": stripped[len("log contains ") :]}
         if lowered.startswith("file exists "):
-            return {"type": "file_exists", "path": stripped[len("file exists "):]}
+            return {"type": "file_exists", "path": stripped[len("file exists ") :]}
         if lowered.startswith("artifact exists "):
-            return {"type": "file_exists", "path": stripped[len("artifact exists "):]}
+            return {"type": "file_exists", "path": stripped[len("artifact exists ") :]}
         return {"type": "description", "value": stripped}
     return {"type": "noop"}
 
@@ -570,7 +673,9 @@ def record_sidecars(paths: WorkflowPaths, manifest: dict[str, Any], consumer_ste
             )
 
 
-def enforce_path_contract(paths: WorkflowPaths, contract: dict[str, Any], *, allow_missing: bool = False) -> tuple[bool, str]:
+def enforce_path_contract(
+    paths: WorkflowPaths, contract: dict[str, Any], *, allow_missing: bool = False
+) -> tuple[bool, str]:
     target = resolve_safe_path(paths.workflow_dir, contract["path"])
     if not target.exists():
         if allow_missing or not contract.get("required", True):
@@ -602,15 +707,22 @@ def enforce_path_contract(paths: WorkflowPaths, contract: dict[str, Any], *, all
                 return False, f"Artifact {contract['path']} must contain a JSON object"
             missing_keys = [key for key in required_keys if key not in payload]
             if missing_keys:
-                return False, f"Artifact {contract['path']} is missing keys: {', '.join(missing_keys)}"
+                return (
+                    False,
+                    f"Artifact {contract['path']} is missing keys: {', '.join(missing_keys)}",
+                )
     return True, "ok"
 
 
-def run_validation_checks(step: dict[str, Any], paths: WorkflowPaths, log_path: Path) -> tuple[bool, str]:
+def run_validation_checks(
+    step: dict[str, Any], paths: WorkflowPaths, log_path: Path
+) -> tuple[bool, str]:
     for check in normalize_validation_checks(step.get("validation_checks", [])):
         check_type = check["type"]
         if check_type == "file_exists":
-            ok, message = enforce_path_contract(paths, {"path": check["path"], "type": "file", "required": True})
+            ok, message = enforce_path_contract(
+                paths, {"path": check["path"], "type": "file", "required": True}
+            )
             if not ok:
                 return False, message
         elif check_type == "path_absent":
@@ -620,7 +732,12 @@ def run_validation_checks(step: dict[str, Any], paths: WorkflowPaths, log_path: 
         elif check_type == "json_required_keys":
             ok, message = enforce_path_contract(
                 paths,
-                {"path": check["path"], "type": "json", "required": True, "schema": {"required_keys": check["required_keys"]}},
+                {
+                    "path": check["path"],
+                    "type": "json",
+                    "required": True,
+                    "schema": {"required_keys": check["required_keys"]},
+                },
             )
             if not ok:
                 return False, message
@@ -641,7 +758,9 @@ def run_validation_checks(step: dict[str, Any], paths: WorkflowPaths, log_path: 
     return True, "ok"
 
 
-def verify_success_gate(step: dict[str, Any], paths: WorkflowPaths, log_path: Path) -> tuple[bool, str]:
+def verify_success_gate(
+    step: dict[str, Any], paths: WorkflowPaths, log_path: Path
+) -> tuple[bool, str]:
     gate = parse_success_gate(step.get("success_gate"))
     gate_type = gate.get("type")
     if gate_type in {"noop", "description"}:
@@ -653,11 +772,15 @@ def verify_success_gate(step: dict[str, Any], paths: WorkflowPaths, log_path: Pa
             return False, f"Success gate not satisfied: missing log text `{expected}`"
         return True, "ok"
     if gate_type == "file_exists":
-        return enforce_path_contract(paths, {"path": gate["path"], "type": "file", "required": True})
+        return enforce_path_contract(
+            paths, {"path": gate["path"], "type": "file", "required": True}
+        )
     return True, "ok"
 
 
-def verify_step_contracts(step: dict[str, Any], paths: WorkflowPaths, log_path: Path) -> tuple[bool, list[str]]:
+def verify_step_contracts(
+    step: dict[str, Any], paths: WorkflowPaths, log_path: Path
+) -> tuple[bool, list[str]]:
     errors: list[str] = []
     for contract in normalize_contracts(step.get("produces", [])):
         ok, message = enforce_path_contract(paths, contract)
@@ -711,22 +834,35 @@ def detect_used_commands(script_path: Path) -> set[str]:
     return commands
 
 
-def enforce_security_policy(step: dict[str, Any], paths: WorkflowPaths, manifest: dict[str, Any], policy: dict[str, Any]) -> tuple[bool, str]:
+def enforce_security_policy(
+    step: dict[str, Any], paths: WorkflowPaths, manifest: dict[str, Any], policy: dict[str, Any]
+) -> tuple[bool, str]:
     working_directory = step.get("working_directory", manifest.get("working_directory", "."))
     resolved_workdir = resolve_safe_path(paths.workflow_dir, working_directory)
     allowed_workdirs = policy.get("environment", {}).get("allowed_working_directories", ["."])
     if isinstance(allowed_workdirs, list):
-        allowed_paths = [resolve_safe_path(paths.workflow_dir, entry) for entry in allowed_workdirs if isinstance(entry, str)]
-        if allowed_paths and not any(allowed in (resolved_workdir, *resolved_workdir.parents) for allowed in allowed_paths):
+        allowed_paths = [
+            resolve_safe_path(paths.workflow_dir, entry)
+            for entry in allowed_workdirs
+            if isinstance(entry, str)
+        ]
+        if allowed_paths and not any(
+            allowed in (resolved_workdir, *resolved_workdir.parents) for allowed in allowed_paths
+        ):
             return False, f"Working directory not allowed by policy: {working_directory}"
     if step["type"] in {"shell", "test", "transform", "publish", "sidecar-consume", "approval"}:
         script_path = resolve_safe_path(paths.workflow_dir, step["script"])
         commands = detect_used_commands(script_path)
-        network_mode = policy.get("environment", {}).get("network_mode", manifest.get("environment", {}).get("network_mode", "inherit"))
+        network_mode = policy.get("environment", {}).get(
+            "network_mode", manifest.get("environment", {}).get("network_mode", "inherit")
+        )
         if network_mode == "offline":
             online_commands = sorted(command for command in commands if command in NETWORK_COMMANDS)
             if online_commands:
-                return False, f"Offline policy blocks network commands: {', '.join(online_commands)}"
+                return (
+                    False,
+                    f"Offline policy blocks network commands: {', '.join(online_commands)}",
+                )
         allowlisted = set(policy.get("tooling", {}).get("allowlisted_commands", []))
         if allowlisted:
             disallowed = sorted(command for command in commands if command not in allowlisted)
@@ -741,7 +877,9 @@ def build_step_env(policy: dict[str, Any]) -> dict[str, str]:
     if not isinstance(allowed_env, list) or not allowed_env:
         print("[runner] WARNING: No `allowed_env` in policy; step inherits full environment.", file=sys.stderr)
         return dict(os.environ)
-    prefixes = [entry[:-1] for entry in allowed_env if isinstance(entry, str) and entry.endswith("*")]
+    prefixes = [
+        entry[:-1] for entry in allowed_env if isinstance(entry, str) and entry.endswith("*")
+    ]
     exact = {entry for entry in allowed_env if isinstance(entry, str) and not entry.endswith("*")}
     result: dict[str, str] = {}
     for key, value in os.environ.items():
@@ -781,7 +919,10 @@ def run_command_step(
                 handle.write(f"\n[runner] Step timed out after {timeout_seconds} seconds.\n")
             return 124, "timeout"
     if step["type"] == "manual-approval":
-        atomic_write_text(log_path, "[runner] Manual approval step completed after approval record was supplied.\n")
+        atomic_write_text(
+            log_path,
+            "[runner] Manual approval step completed after approval record was supplied.\n",
+        )
         return 0, "manual-approval"
     executor_config = step.get("executor_config", {})
     if step["type"] == "file-exists":
@@ -793,7 +934,9 @@ def run_command_step(
         try:
             payload = json.loads(target.read_text(encoding="utf-8"))
             required_keys = executor_config.get("required_keys", [])
-            if required_keys and (not isinstance(payload, dict) or any(key not in payload for key in required_keys)):
+            if required_keys and (
+                not isinstance(payload, dict) or any(key not in payload for key in required_keys)
+            ):
                 atomic_write_text(log_path, "[runner] JSON validation failed.\n")
                 return 1, "native"
             atomic_write_text(log_path, "[runner] JSON validation passed.\n")
@@ -829,7 +972,10 @@ def run_command_step(
         destination = resolve_safe_path(paths.workflow_dir, executor_config["destination"])
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(source, destination)
-        atomic_write_text(log_path, f"[runner] Copied {executor_config['source']} -> {executor_config['destination']}\n")
+        atomic_write_text(
+            log_path,
+            f"[runner] Copied {executor_config['source']} -> {executor_config['destination']}\n",
+        )
         return 0, "native"
     if step["type"] == "http-check":
         try:
@@ -860,7 +1006,13 @@ def run_command_step(
     return 1, "native"
 
 
-def run_rollback(step: dict[str, Any], paths: WorkflowPaths, manifest: dict[str, Any], policy: dict[str, Any], run_context: RunContext) -> None:
+def run_rollback(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    manifest: dict[str, Any],
+    policy: dict[str, Any],
+    run_context: RunContext,
+) -> None:
     rollback = step.get("rollback")
     if not isinstance(rollback, dict):
         return
@@ -871,7 +1023,9 @@ def run_rollback(step: dict[str, Any], paths: WorkflowPaths, manifest: dict[str,
             target = resolve_safe_path(paths.workflow_dir, precondition)
             if not target.exists():
                 return
-    cwd = resolve_safe_path(paths.workflow_dir, step.get("working_directory", manifest.get("working_directory", ".")))
+    cwd = resolve_safe_path(
+        paths.workflow_dir, step.get("working_directory", manifest.get("working_directory", "."))
+    )
     with log_path.open("w", encoding="utf-8") as handle:
         result = subprocess.run(
             ["bash", str(script_path)],
@@ -885,7 +1039,10 @@ def run_rollback(step: dict[str, Any], paths: WorkflowPaths, manifest: dict[str,
         )
     if run_context.run_dir is not None:
         shutil.copyfile(log_path, run_context.run_dir / "logs" / f"{step['id']}.rollback.log")
-        record_event(run_context, {"event": "rollback", "step_id": step["id"], "returncode": result.returncode})
+        record_event(
+            run_context,
+            {"event": "rollback", "step_id": step["id"], "returncode": result.returncode},
+        )
 
 
 def mark_step_status(paths: WorkflowPaths, step_id: str, status: str) -> None:
@@ -920,31 +1077,71 @@ def execute_single_step(
         update_runtime_step(
             paths,
             step_id,
-            {"status": "failed", "ended_at": utc_now(), "last_error": consume_errors[0], "category": "input-contract"},
+            {
+                "status": "failed",
+                "ended_at": utc_now(),
+                "last_error": consume_errors[0],
+                "category": "input-contract",
+            },
         )
-        return StepResult(step_id=step_id, returncode=1, category="input-contract", message=consume_errors[0], duration_seconds=0.0)
+        return StepResult(
+            step_id=step_id,
+            returncode=1,
+            category="input-contract",
+            message=consume_errors[0],
+            duration_seconds=0.0,
+        )
 
     ok, message = enforce_security_policy(step, paths, manifest, policy)
     if not ok:
         atomic_write_text(log_path, message + "\n")
         mark_step_status(paths, step_id, "failed")
-        update_runtime_step(paths, step_id, {"status": "failed", "ended_at": utc_now(), "last_error": message, "category": "security"})
-        return StepResult(step_id=step_id, returncode=1, category="security", message=message, duration_seconds=0.0)
+        update_runtime_step(
+            paths,
+            step_id,
+            {
+                "status": "failed",
+                "ended_at": utc_now(),
+                "last_error": message,
+                "category": "security",
+            },
+        )
+        return StepResult(
+            step_id=step_id,
+            returncode=1,
+            category="security",
+            message=message,
+            duration_seconds=0.0,
+        )
 
     mark_step_status(paths, step_id, "running")
     record_sidecars(paths, manifest, step_id)
     base_attempt = int(step.get("_attempt", 0))
-    last_result = StepResult(step_id=step_id, returncode=1, category="failed", message="failed", duration_seconds=0.0)
+    last_result = StepResult(
+        step_id=step_id, returncode=1, category="failed", message="failed", duration_seconds=0.0
+    )
     for attempt in range(base_attempt, base_attempt + retries + 1):
         started_at = time.monotonic()
         update_runtime_step(
             paths,
             step_id,
-            {"status": "running", "started_at": utc_now(), "last_attempt": attempt, "pid": os.getpid(), "run_id": run_context.run_id},
+            {
+                "status": "running",
+                "started_at": utc_now(),
+                "last_attempt": attempt,
+                "pid": os.getpid(),
+                "run_id": run_context.run_id,
+            },
         )
-        record_event(run_context, {"event": "step_started", "step_id": step_id, "type": step["type"], "attempt": attempt})
+        record_event(
+            run_context,
+            {"event": "step_started", "step_id": step_id, "type": step["type"], "attempt": attempt},
+        )
         if run_context.run_dir is not None:
-            append_text(run_context.run_dir / "commands.log", f"BEGIN\t{step_id}\tattempt={attempt}\t{step.get('script', '-')}")
+            append_text(
+                run_context.run_dir / "commands.log",
+                f"BEGIN\t{step_id}\tattempt={attempt}\t{step.get('script', '-')}",
+            )
 
         returncode, category = run_command_step(step, paths, manifest, policy, log_path)
         duration_seconds = round(time.monotonic() - started_at, 3)
@@ -961,26 +1158,69 @@ def execute_single_step(
 
         if returncode == 0:
             mark_step_status(paths, step_id, "complete")
-            if should_require_approval(step, policy) and policy.get("approval", {}).get("auto_use_once", True):
+            if should_require_approval(step, policy) and policy.get("approval", {}).get(
+                "auto_use_once", True
+            ):
                 mark_approval_status(paths, step_id, "used")
             update_runtime_step(
                 paths,
                 step_id,
-                {"status": "complete", "ended_at": utc_now(), "duration_seconds": duration_seconds, "category": category},
+                {
+                    "status": "complete",
+                    "ended_at": utc_now(),
+                    "duration_seconds": duration_seconds,
+                    "category": category,
+                },
             )
-            record_event(run_context, {"event": "step_completed", "step_id": step_id, "duration_seconds": duration_seconds, "attempt": attempt})
+            record_event(
+                run_context,
+                {
+                    "event": "step_completed",
+                    "step_id": step_id,
+                    "duration_seconds": duration_seconds,
+                    "attempt": attempt,
+                },
+            )
             if run_context.run_dir is not None:
-                append_text(run_context.run_dir / "commands.log", f"COMPLETE\t{step_id}\tattempt={attempt}\tduration={duration_seconds}")
-            return StepResult(step_id=step_id, returncode=0, category=category, message="ok", duration_seconds=duration_seconds)
+                append_text(
+                    run_context.run_dir / "commands.log",
+                    f"COMPLETE\t{step_id}\tattempt={attempt}\tduration={duration_seconds}",
+                )
+            return StepResult(
+                step_id=step_id,
+                returncode=0,
+                category=category,
+                message="ok",
+                duration_seconds=duration_seconds,
+            )
 
         if category == "timeout":
             with log_path.open("a", encoding="utf-8") as handle:
-                handle.write(f"[runner] Timeout enforced after {step.get('timeout_seconds', 1800)} seconds.\n")
-        last_result = StepResult(step_id=step_id, returncode=1, category=category, message="failed", duration_seconds=duration_seconds)
+                handle.write(
+                    f"[runner] Timeout enforced after {step.get('timeout_seconds', 1800)} seconds.\n"
+                )
+        last_result = StepResult(
+            step_id=step_id,
+            returncode=1,
+            category=category,
+            message="failed",
+            duration_seconds=duration_seconds,
+        )
         if attempt < base_attempt + retries:
-            record_event(run_context, {"event": "step_retry", "step_id": step_id, "attempt": attempt, "category": category})
+            record_event(
+                run_context,
+                {
+                    "event": "step_retry",
+                    "step_id": step_id,
+                    "attempt": attempt,
+                    "category": category,
+                },
+            )
             if run_context.run_dir is not None:
-                append_text(run_context.run_dir / "commands.log", f"RETRY\t{step_id}\tattempt={attempt}\tcategory={category}")
+                append_text(
+                    run_context.run_dir / "commands.log",
+                    f"RETRY\t{step_id}\tattempt={attempt}\tcategory={category}",
+                )
             continue
 
     rollback = step.get("rollback")
@@ -990,11 +1230,21 @@ def execute_single_step(
     update_runtime_step(
         paths,
         step_id,
-        {"status": "failed", "ended_at": utc_now(), "duration_seconds": last_result.duration_seconds, "category": last_result.category},
+        {
+            "status": "failed",
+            "ended_at": utc_now(),
+            "duration_seconds": last_result.duration_seconds,
+            "category": last_result.category,
+        },
     )
     record_event(
         run_context,
-        {"event": "step_failed", "step_id": step_id, "category": last_result.category, "duration_seconds": last_result.duration_seconds},
+        {
+            "event": "step_failed",
+            "step_id": step_id,
+            "category": last_result.category,
+            "duration_seconds": last_result.duration_seconds,
+        },
     )
     if run_context.run_dir is not None:
         append_text(
@@ -1009,7 +1259,13 @@ def record_metrics(paths: WorkflowPaths, run_context: RunContext, result: StepRe
         payload.setdefault("steps", {})
         metrics = payload["steps"].setdefault(
             result.step_id,
-            {"runs": 0, "failures": 0, "timeouts": 0, "last_duration_seconds": 0.0, "last_failure_category": ""},
+            {
+                "runs": 0,
+                "failures": 0,
+                "timeouts": 0,
+                "last_duration_seconds": 0.0,
+                "last_failure_category": "",
+            },
         )
         metrics["runs"] += 1
         metrics["last_duration_seconds"] = result.duration_seconds
@@ -1018,6 +1274,7 @@ def record_metrics(paths: WorkflowPaths, run_context: RunContext, result: StepRe
             metrics["last_failure_category"] = result.category
         if result.category == "timeout":
             metrics["timeouts"] += 1
+
     update_metrics(paths, mutate)
     run_context.metrics.setdefault("steps", {})
     run_context.metrics["steps"][result.step_id] = {
@@ -1038,7 +1295,11 @@ def reconcile_interrupted_steps(manifest: dict[str, Any], paths: WorkflowPaths) 
             update_runtime_step(
                 paths,
                 step_id,
-                {"status": "interrupted", "ended_at": utc_now(), "last_error": "Runner exited before step completion."},
+                {
+                    "status": "interrupted",
+                    "ended_at": utc_now(),
+                    "last_error": "Runner exited before step completion.",
+                },
             )
     if repaired:
         write_tsv_state(paths.step_state_path, step_state)
@@ -1051,7 +1312,7 @@ def ordered_subset(manifest: dict[str, Any], start_step: str | None = None) -> l
         return order
     if start_step not in order:
         raise KeyError(start_step)
-    return order[order.index(start_step):]
+    return order[order.index(start_step) :]
 
 
 def executable_order_index(manifest: dict[str, Any]) -> dict[str, int]:
@@ -1081,7 +1342,11 @@ def run_many(
                 print(f"WOULD RUN\t{step_id}\t{step['type']}\t{step.get('script', '-')}")
         return 0
 
-    run_context = setup_run_audit(paths, manifest, policy) if audit_enabled(manifest, policy) else RunContext(run_id=None, run_dir=None, dry_run=False, metrics={"steps": {}})
+    run_context = (
+        setup_run_audit(paths, manifest, policy)
+        if audit_enabled(manifest, policy)
+        else RunContext(run_id=None, run_dir=None, dry_run=False, metrics={"steps": {}})
+    )
     pending = [step_id for step_id in order if step_state.get(step_id) != "complete"]
     completed = {step_id for step_id, status in step_state.items() if status == "complete"}
     running: dict[concurrent.futures.Future[StepResult], str] = {}
@@ -1099,7 +1364,10 @@ def run_many(
                     deps = step.get("depends_on", [])
                     if any(dep not in completed for dep in deps):
                         continue
-                    if should_require_approval(step, policy) and read_tsv_state(paths.approval_state_path).get(step_id) != "approved":
+                    if (
+                        should_require_approval(step, policy)
+                        and read_tsv_state(paths.approval_state_path).get(step_id) != "approved"
+                    ):
                         if read_tsv_state(paths.step_state_path).get(step_id) != "waiting-approval":
                             mark_step_status(paths, step_id, "waiting-approval")
                         continue
@@ -1109,16 +1377,32 @@ def run_many(
                     step_id = launchable.pop(0)
                     pending.remove(step_id)
                     step = dict(step_map[step_id])
-                    attempts = read_json_file(paths.runtime_state_path, {"steps": {}}).get("steps", {}).get(step_id, {}).get("last_attempt", -1)
+                    attempts = (
+                        read_json_file(paths.runtime_state_path, {"steps": {}})
+                        .get("steps", {})
+                        .get(step_id, {})
+                        .get("last_attempt", -1)
+                    )
                     step["_attempt"] = int(attempts) + 1
-                    future = executor.submit(execute_single_step, manifest, step, paths, policy, run_context)
+                    future = executor.submit(
+                        execute_single_step, manifest, step, paths, policy, run_context
+                    )
                     running[future] = step_id
             if not running:
                 if pending:
-                    failure_code = 3 if any(read_tsv_state(paths.step_state_path).get(step_id) == "waiting-approval" for step_id in pending) else 2
+                    failure_code = (
+                        3
+                        if any(
+                            read_tsv_state(paths.step_state_path).get(step_id) == "waiting-approval"
+                            for step_id in pending
+                        )
+                        else 2
+                    )
                 break
 
-            done, _ = concurrent.futures.wait(list(running.keys()), return_when=concurrent.futures.FIRST_COMPLETED)
+            done, _ = concurrent.futures.wait(
+                list(running.keys()), return_when=concurrent.futures.FIRST_COMPLETED
+            )
             for future in done:
                 step_id = running.pop(future)
                 result = future.result()
@@ -1178,13 +1462,20 @@ def approve_step(
     }
     append_jsonl(paths.approval_records_path, record)
     if run_dir is not None:
-        append_text(run_dir / "approvals.log", f"APPROVED\t{step_id}\tapprover={approver}\treason={reason or ''}\tchange_ref={change_ref or ''}")
-        append_jsonl(run_dir / "events.jsonl", {"timestamp": utc_now(), "event": "approval", **record})
+        append_text(
+            run_dir / "approvals.log",
+            f"APPROVED\t{step_id}\tapprover={approver}\treason={reason or ''}\tchange_ref={change_ref or ''}",
+        )
+        append_jsonl(
+            run_dir / "events.jsonl", {"timestamp": utc_now(), "event": "approval", **record}
+        )
     print(f"Approved {step_id}")
     return 0
 
 
-def rollback_step(manifest: dict[str, Any], paths: WorkflowPaths, policy: dict[str, Any], step_id: str) -> int:
+def rollback_step(
+    manifest: dict[str, Any], paths: WorkflowPaths, policy: dict[str, Any], step_id: str
+) -> int:
     step = get_steps_by_id(manifest).get(step_id)
     if step is None:
         print(f"Unknown step: {step_id}", file=sys.stderr)
@@ -1192,7 +1483,11 @@ def rollback_step(manifest: dict[str, Any], paths: WorkflowPaths, policy: dict[s
     if "rollback" not in step:
         print(f"Step {step_id} does not define rollback.")
         return 0
-    run_context = setup_run_audit(paths, manifest, policy) if audit_enabled(manifest, policy) else RunContext(run_id=None, run_dir=None, dry_run=False, metrics={"steps": {}})
+    run_context = (
+        setup_run_audit(paths, manifest, policy)
+        if audit_enabled(manifest, policy)
+        else RunContext(run_id=None, run_dir=None, dry_run=False, metrics={"steps": {}})
+    )
     try:
         run_rollback(step, paths, manifest, policy, run_context)
         mark_step_status(paths, step_id, "rolled-back")
@@ -1206,8 +1501,12 @@ def repair_state(manifest: dict[str, Any], paths: WorkflowPaths) -> int:
     repaired = reconcile_interrupted_steps(manifest, paths)
     step_state, step_errors = read_tsv_state_with_errors(paths.step_state_path)
     approval_state, approval_errors = read_tsv_state_with_errors(paths.approval_state_path)
-    _, runtime_errors = read_json_file_with_errors(paths.runtime_state_path, {"active_run_id": None, "steps": {}, "updated_at": utc_now()})
-    _, metrics_errors = read_json_file_with_errors(paths.metrics_path, {"workflow_runs": 0, "steps": {}})
+    _, runtime_errors = read_json_file_with_errors(
+        paths.runtime_state_path, {"active_run_id": None, "steps": {}, "updated_at": utc_now()}
+    )
+    _, metrics_errors = read_json_file_with_errors(
+        paths.metrics_path, {"workflow_runs": 0, "steps": {}}
+    )
     if step_errors:
         step_state = {step["id"]: "pending" for step in manifest["steps"]}
     if approval_errors:
@@ -1224,7 +1523,13 @@ def repair_state(manifest: dict[str, Any], paths: WorkflowPaths) -> int:
             step_state[step_id] = "pending"
     write_tsv_state(paths.step_state_path, step_state)
     write_tsv_state(paths.approval_state_path, approval_state)
-    repaired_count = len(repaired) + len(step_errors) + len(approval_errors) + len(runtime_errors) + len(metrics_errors)
+    repaired_count = (
+        len(repaired)
+        + len(step_errors)
+        + len(approval_errors)
+        + len(runtime_errors)
+        + len(metrics_errors)
+    )
     print(f"Repaired {repaired_count} state issue(s).")
     return 0
 
@@ -1233,8 +1538,12 @@ def doctor(manifest: dict[str, Any], paths: WorkflowPaths, policy: dict[str, Any
     issues: list[list[str]] = []
     step_state, step_errors = read_tsv_state_with_errors(paths.step_state_path)
     approval_state, approval_errors = read_tsv_state_with_errors(paths.approval_state_path)
-    _, runtime_errors = read_json_file_with_errors(paths.runtime_state_path, {"active_run_id": None, "steps": {}, "updated_at": utc_now()})
-    _, metrics_errors = read_json_file_with_errors(paths.metrics_path, {"workflow_runs": 0, "steps": {}})
+    _, runtime_errors = read_json_file_with_errors(
+        paths.runtime_state_path, {"active_run_id": None, "steps": {}, "updated_at": utc_now()}
+    )
+    _, metrics_errors = read_json_file_with_errors(
+        paths.metrics_path, {"workflow_runs": 0, "steps": {}}
+    )
     for error in step_errors:
         issues.append(["state/step-status.tsv", "corrupt-state", error])
     for error in approval_errors:
@@ -1247,13 +1556,21 @@ def doctor(manifest: dict[str, Any], paths: WorkflowPaths, policy: dict[str, Any
         step_id = step["id"]
         status = step_state.get(step_id, "missing")
         if status == "interrupted":
-            issues.append([step_id, "interrupted", "Runner exited before step completion; use --repair and then --resume."])
+            issues.append(
+                [
+                    step_id,
+                    "interrupted",
+                    "Runner exited before step completion; use --repair and then --resume.",
+                ]
+            )
         if status == "complete":
             ok, errors = verify_step_contracts(step, paths, paths.log_dir / f"{step_id}.log")
             if not ok:
                 issues.append([step_id, "contract-drift", "; ".join(errors)])
         if should_require_approval(step, policy) and approval_state.get(step_id) == "pending":
-            issues.append([step_id, "approval-pending", "Approval required before this step can run."])
+            issues.append(
+                [step_id, "approval-pending", "Approval required before this step can run."]
+            )
     if not issues:
         print("Workflow state looks healthy.")
         return 0
@@ -1269,25 +1586,41 @@ def reset_state(manifest: dict[str, Any], paths: WorkflowPaths) -> int:
 
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Python execution engine for deterministic workflows.")
+    parser = argparse.ArgumentParser(
+        description="Python execution engine for deterministic workflows."
+    )
     parser.add_argument("--workflow-dir", default=".", help="Workflow directory to operate on.")
-    parser.add_argument("--dry-run", action="store_true", help="Preview execution without running steps.")
+    parser.add_argument(
+        "--dry-run", action="store_true", help="Preview execution without running steps."
+    )
     parser.add_argument("--list", action="store_true", help="List step status.")
     parser.add_argument("--sidecars", action="store_true", help="List configured sidecars.")
     parser.add_argument("--list-runs", action="store_true", help="List recorded audit runs.")
     parser.add_argument("--replay", default=None, help="Replay a recorded run by id.")
-    parser.add_argument("--simulate-run", default=None, help="Replay a run and print the expected step order.")
+    parser.add_argument(
+        "--simulate-run", default=None, help="Replay a run and print the expected step order."
+    )
     parser.add_argument("--reset", action="store_true", help="Reset workflow state.")
-    parser.add_argument("--resume", action="store_true", help="Resume from the first incomplete step.")
+    parser.add_argument(
+        "--resume", action="store_true", help="Resume from the first incomplete step."
+    )
     parser.add_argument("--from-step", default=None, help="Run from the specified step onward.")
     parser.add_argument("--step", default=None, help="Run a single step.")
     parser.add_argument("--approve", default=None, help="Approve a waiting step.")
-    parser.add_argument("--approver", default=os.environ.get("USER", "unknown"), help="Approver identity for structured approvals.")
+    parser.add_argument(
+        "--approver",
+        default=os.environ.get("USER", "unknown"),
+        help="Approver identity for structured approvals.",
+    )
     parser.add_argument("--approval-reason", default=None, help="Structured approval reason.")
-    parser.add_argument("--change-ref", default=None, help="Ticket, change request, or rollout reference.")
+    parser.add_argument(
+        "--change-ref", default=None, help="Ticket, change request, or rollout reference."
+    )
     parser.add_argument("--rollback", default=None, help="Run rollback for the specified step.")
     parser.add_argument("--doctor", action="store_true", help="Diagnose workflow state problems.")
-    parser.add_argument("--repair", action="store_true", help="Repair interrupted state so the workflow can resume.")
+    parser.add_argument(
+        "--repair", action="store_true", help="Repair interrupted state so the workflow can resume."
+    )
     return parser.parse_args(argv)
 
 
@@ -1343,14 +1676,40 @@ def main(argv: list[str]) -> int:
             if current_status == "complete" and not args.dry_run:
                 print(f"Step {step['id']} is already complete. Use --reset first to re-run.", file=sys.stderr)
                 return 0
-            run_context = setup_run_audit(paths, manifest, policy) if audit_enabled(manifest, policy) and not args.dry_run else RunContext(run_id=None, run_dir=None, dry_run=args.dry_run, metrics={"steps": {}})
+            run_context = (
+                setup_run_audit(paths, manifest, policy)
+                if audit_enabled(manifest, policy) and not args.dry_run
+                else RunContext(
+                    run_id=None, run_dir=None, dry_run=args.dry_run, metrics={"steps": {}}
+                )
+            )
+            current_status = read_tsv_state(paths.step_state_path).get(step["id"])
+            if current_status == "complete" and not args.dry_run:
+                print(
+                    f"Step {step['id']} is already complete. Use --reset first to re-run.",
+                    file=sys.stderr,
+                )
+                return 0
+            run_context = (
+                setup_run_audit(paths, manifest, policy)
+                if audit_enabled(manifest, policy) and not args.dry_run
+                else RunContext(
+                    run_id=None, run_dir=None, dry_run=args.dry_run, metrics={"steps": {}}
+                )
+            )
             try:
                 if args.dry_run:
                     print(f"WOULD RUN\t{step['id']}\t{step['type']}\t{step.get('script', '-')}")
                     return 0
-                if should_require_approval(step, policy) and read_tsv_state(paths.approval_state_path).get(step["id"]) != "approved":
+                if (
+                    should_require_approval(step, policy)
+                    and read_tsv_state(paths.approval_state_path).get(step["id"]) != "approved"
+                ):
                     mark_step_status(paths, step["id"], "waiting-approval")
-                    print(f"Approval required before {step['id']}. Run ./run_workflow.sh --approve {step['id']}", file=sys.stderr)
+                    print(
+                        f"Approval required before {step['id']}. Run ./run_workflow.sh --approve {step['id']}",
+                        file=sys.stderr,
+                    )
                     return 3
                 result = execute_single_step(manifest, step, paths, policy, run_context)
                 record_metrics(paths, run_context, result)
@@ -1358,7 +1717,9 @@ def main(argv: list[str]) -> int:
             finally:
                 finalize_run_audit(paths, manifest, run_context)
         if args.from_step is not None:
-            return run_many(manifest, paths, policy, start_step=args.from_step, dry_run=args.dry_run)
+            return run_many(
+                manifest, paths, policy, start_step=args.from_step, dry_run=args.dry_run
+            )
         if args.resume:
             start_step = first_incomplete_step(manifest, paths)
             if start_step is None:
