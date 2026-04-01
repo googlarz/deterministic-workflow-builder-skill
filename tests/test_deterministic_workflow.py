@@ -121,6 +121,11 @@ class DeterministicWorkflowTests(unittest.TestCase):
     def test_approval_gate_blocks_until_approved(self) -> None:
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
+            isolated_home = root / "isolated-home"
+            isolated_home.mkdir()
+            env = dict(os.environ)
+            env["HOME"] = str(isolated_home)
+            env["CODEX_HOME"] = str(root / "isolated-codex")
             run_command(
                 "python3",
                 str(INIT_SCRIPT),
@@ -150,7 +155,9 @@ class DeterministicWorkflowTests(unittest.TestCase):
             )
             (workflow_dir / "steps" / "01-review.sh").chmod(0o755)
 
-            blocked = run_command(str(workflow_dir / "run_workflow.sh"), "--step", "01-review")
+            blocked = run_command(
+                str(workflow_dir / "run_workflow.sh"), "--step", "01-review", env=env
+            )
             self.assertEqual(blocked.returncode, 3, blocked.stdout + blocked.stderr)
             self.assertIn("Approval required", blocked.stderr)
 
@@ -160,10 +167,13 @@ class DeterministicWorkflowTests(unittest.TestCase):
                 "01-review",
                 "--approval-reason",
                 "validated release checklist",
+                env=env,
             )
             self.assertEqual(approved.returncode, 0, approved.stderr)
 
-            completed = run_command(str(workflow_dir / "run_workflow.sh"), "--step", "01-review")
+            completed = run_command(
+                str(workflow_dir / "run_workflow.sh"), "--step", "01-review", env=env
+            )
             self.assertEqual(completed.returncode, 0, completed.stderr)
 
             step_state = (workflow_dir / "state" / "step-status.tsv").read_text(encoding="utf-8")
@@ -177,7 +187,13 @@ class DeterministicWorkflowTests(unittest.TestCase):
             )
             self.assertIn("validated release checklist", approval_records)
 
-            replay = run_command(str(workflow_dir / "run_workflow.sh"), "--replay", "run-0001")
+            runs = run_command(str(workflow_dir / "run_workflow.sh"), "--list-runs", env=env)
+            self.assertEqual(runs.returncode, 0, runs.stderr)
+            latest_run = [line for line in runs.stdout.splitlines() if line.strip()][-1].strip()
+
+            replay = run_command(
+                str(workflow_dir / "run_workflow.sh"), "--replay", latest_run, env=env
+            )
             self.assertEqual(replay.returncode, 0, replay.stderr)
             self.assertIn("APPROVED", replay.stdout)
 
