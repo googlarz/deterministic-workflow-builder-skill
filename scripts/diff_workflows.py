@@ -14,7 +14,6 @@ from workflow_schema import (
     summarize_sidecars,
 )
 
-
 STEP_DETAIL_FIELDS = ("type", "gate_type", "requires_approval", "retry_limit", "timeout_seconds")
 
 
