@@ -2910,6 +2910,47 @@ def generate_workflow(description: str, output_dir: Path) -> int:
     return 0
 
 
+def _import_n8n_command(n8n_path: Path, output_dir: Path | None) -> int:
+    """Delegate to import_n8n.py."""
+    import importlib.util  # noqa: PLC0415
+
+    import_script = Path(__file__).resolve().parent / "import_n8n.py"
+    spec = importlib.util.spec_from_file_location("import_n8n", import_script)
+    if spec is None or spec.loader is None:
+        print("[import-n8n] Could not load import_n8n.py", file=sys.stderr)
+        return 1
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+
+    try:
+        n8n_export = json.loads(n8n_path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError) as exc:
+        print(f"[import-n8n] Failed to read {n8n_path}: {exc}", file=sys.stderr)
+        return 1
+
+    manifest, proposals = mod.convert(n8n_export)
+    if output_dir is None:
+        output_dir = Path(manifest["workflow_name"])
+
+    mod.scaffold(manifest, proposals, output_dir)
+
+    runner_path = Path(__file__).resolve()
+    run_sh = output_dir / "run_workflow.sh"
+    run_sh.write_text(
+        f"#!/usr/bin/env bash\nexec python3 {runner_path} \"$(dirname \"$0\")\" \"$@\"\n",
+        encoding="utf-8",
+    )
+    run_sh.chmod(0o755)
+
+    n_steps = len(manifest["steps"])
+    n_triggers = len(manifest.get("triggers", []))
+    print(f"[import-n8n] '{n8n_export.get('name')}' → {output_dir}/")
+    print(f"  {n_steps} step(s), {n_triggers} trigger(s), {len(proposals)} improvement proposal(s)")
+    if proposals:
+        print(f"  Review improvements: ./run_workflow.sh --list-mutations")
+    return 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Python execution engine for deterministic workflows."
@@ -2973,6 +3014,13 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="List all available Codex and Claude Code skills.",
     )
     parser.add_argument(
+        "--import-n8n",
+        default=None,
+        metavar="N8N_EXPORT",
+        dest="import_n8n",
+        help="Import an n8n workflow export JSON and convert it to workflow.json.",
+    )
+    parser.add_argument(
         "--generate",
         default=None,
         metavar="DESCRIPTION",
@@ -3002,6 +3050,9 @@ def main(argv: list[str]) -> int:
 
     if args.discover_skills:
         return discover_skills_command()
+
+    if args.import_n8n:
+        return _import_n8n_command(Path(args.import_n8n), Path(args.output_dir) if args.output_dir else None)
 
     if args.generate:
         out = Path(args.output_dir) if args.output_dir else Path(_slugify(args.generate))

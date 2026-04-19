@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.0
+- `--import-n8n <file>` — Convert any n8n workflow export JSON to a `workflow.json`. Maps 30+ n8n node types: `executeCommand` → `shell`, `httpRequest` → `http`, `if` → `branch`, `switch` → `switch`, `merge` → `merge`, `wait` → `wait`, `code` → `shell`, langchain/AI nodes → `claude`, service nodes (Slack, Gmail, GitHub, Notion, Jira, Linear, S3, Postgres…) → `http` with placeholder URLs. Extracts `schedule` and `webhook` triggers. Topologically sorts steps and injects `needs` dependencies.
+- Auto-improvement proposals — Imported workflows automatically get pending mutation proposals for service nodes (upgrade to `type:mcp`), inline code stubs (port to script), placeholder URLs, and auto-generated branch conditions. Reviewable with `--list-mutations`.
+- `scripts/import_n8n.py` — Standalone converter; also callable via `run_workflow.py --import-n8n`.
+- 7 new tests; 61/61 pass.
+
 ## 1.3.0
 - `type: "skill"` — Run any Codex or Claude Code skill as a workflow step. Loads SKILL.md, builds a combined prompt with artifact context, and calls the claude CLI. Skill name resolves by exact match or case-insensitive prefix.
 - `scripts/discover_skills.py` — Auto-discovers all installed skills from `~/.codex/skills/`, `~/.claude/plugins/cache`, `~/.claude/skills/`, and `~/.claude/plugins/`. Deduplicates by name (more-specific paths win). Returns name, path, source, description, and whether a SKILL.md exists.

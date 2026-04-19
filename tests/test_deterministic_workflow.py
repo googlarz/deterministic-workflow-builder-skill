@@ -1936,5 +1936,144 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.assertTrue(any("skill" in i.message.lower() for i in errors))
 
 
+class N8nImportTests(unittest.TestCase):
+    """Tests for --import-n8n / import_n8n.py."""
+
+    RUN_SCRIPT = SKILL_DIR / "scripts" / "run_workflow.py"
+    IMPORT_SCRIPT = SKILL_DIR / "scripts" / "import_n8n.py"
+
+    def _load_importer(self):
+        import importlib.util  # noqa: PLC0415
+        spec = importlib.util.spec_from_file_location("import_n8n", self.IMPORT_SCRIPT)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        return mod
+
+    def _minimal_n8n(self, name: str = "Test Workflow") -> dict:
+        return {
+            "name": name,
+            "nodes": [
+                {
+                    "id": "n1",
+                    "name": "Execute Command",
+                    "type": "n8n-nodes-base.executeCommand",
+                    "parameters": {"command": "echo hello"},
+                    "position": [100, 200],
+                },
+                {
+                    "id": "n2",
+                    "name": "HTTP Request",
+                    "type": "n8n-nodes-base.httpRequest",
+                    "parameters": {"method": "GET", "url": "https://example.com/api"},
+                    "position": [300, 200],
+                },
+            ],
+            "connections": {
+                "Execute Command": {
+                    "main": [[{"node": "HTTP Request", "type": "main", "index": 0}]]
+                }
+            },
+        }
+
+    def test_convert_basic_workflow(self) -> None:
+        mod = self._load_importer()
+        manifest, proposals = mod.convert(self._minimal_n8n())
+        self.assertEqual(manifest["schema_version"], 4)
+        steps = manifest["steps"]
+        self.assertEqual(len(steps), 2)
+        ids = [s["id"] for s in steps]
+        self.assertIn("execute-command", ids)
+        self.assertIn("http-request", ids)
+
+    def test_dependency_preserved(self) -> None:
+        mod = self._load_importer()
+        manifest, _ = mod.convert(self._minimal_n8n())
+        steps_by_id = {s["id"]: s for s in manifest["steps"]}
+        # http-request depends on execute-command
+        self.assertIn("execute-command", steps_by_id["http-request"].get("needs", []))
+
+    def test_http_node_mapped_correctly(self) -> None:
+        mod = self._load_importer()
+        manifest, _ = mod.convert(self._minimal_n8n())
+        http_step = next(s for s in manifest["steps"] if s["id"] == "http-request")
+        self.assertEqual(http_step["type"], "http")
+        self.assertEqual(http_step["method"], "GET")
+        self.assertEqual(http_step["url"], "https://example.com/api")
+
+    def test_triggers_extracted(self) -> None:
+        mod = self._load_importer()
+        export = self._minimal_n8n()
+        export["nodes"].append({
+            "id": "t1",
+            "name": "Cron",
+            "type": "n8n-nodes-base.cron",
+            "parameters": {"rule": {"interval": [{"field": "hours", "hoursInterval": 2}]}},
+            "position": [0, 0],
+        })
+        manifest, _ = mod.convert(export)
+        triggers = manifest.get("triggers", [])
+        self.assertEqual(len(triggers), 1)
+        self.assertEqual(triggers[0]["type"], "schedule")
+        self.assertIn("*/2", triggers[0]["cron"])
+
+    def test_service_node_generates_improvement_proposal(self) -> None:
+        mod = self._load_importer()
+        export = {
+            "name": "Slack Notifier",
+            "nodes": [{
+                "id": "s1",
+                "name": "Send Slack",
+                "type": "n8n-nodes-base.slack",
+                "parameters": {"resource": "message", "operation": "post"},
+                "position": [0, 0],
+            }],
+            "connections": {},
+        }
+        _, proposals = mod.convert(export)
+        self.assertTrue(any("mcp" in p.get("rationale", "").lower() for p in proposals))
+
+    def test_skip_nodes_excluded(self) -> None:
+        mod = self._load_importer()
+        export = {
+            "name": "With Sticky",
+            "nodes": [
+                {
+                    "id": "sticky",
+                    "name": "Note",
+                    "type": "n8n-nodes-base.stickyNote",
+                    "parameters": {},
+                    "position": [0, 0],
+                },
+                {
+                    "id": "cmd",
+                    "name": "Run",
+                    "type": "n8n-nodes-base.executeCommand",
+                    "parameters": {"command": "echo ok"},
+                    "position": [100, 0],
+                },
+            ],
+            "connections": {},
+        }
+        manifest, _ = mod.convert(export)
+        self.assertEqual(len(manifest["steps"]), 1)
+        self.assertEqual(manifest["steps"][0]["id"], "run")
+
+    def test_cli_import_n8n_flag(self) -> None:
+        import tempfile  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            export_file = tmp / "export.json"
+            export_file.write_text(json.dumps(self._minimal_n8n()), encoding="utf-8")
+            out_dir = tmp / "imported"
+            result = run_command(
+                "python3", str(self.RUN_SCRIPT),
+                "--import-n8n", str(export_file),
+                "--output-dir", str(out_dir),
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertTrue((out_dir / "workflow.json").exists())
+            self.assertTrue((out_dir / "run_workflow.sh").exists())
+
+
 if __name__ == "__main__":
     unittest.main()
