@@ -22,7 +22,12 @@ REQUIRED_PATHS = (
     "scripts/compile_workflow.py",
     "tests/test_deterministic_workflow.py",
 )
-EXCLUDED_DIRS = {".git", ".github", "__pycache__", ".ruff_cache", ".tox", ".venv", "dist", "build"}
+EXCLUDED_DIRS = {
+    ".git", ".github", "__pycache__", ".ruff_cache", ".tox", ".venv",
+    "dist", "build",
+    # runtime-generated directories that must never appear in a release archive
+    "artifacts", "logs", "state", "audit", "runs",
+}
 EXCLUDED_FILES = {".DS_Store"}
 
 

@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.2
+- Added `scripts/visualize_workflow.py`: n8n-style interactive HTML DAG viewer auto-generated after every run.
+- Added `--visualize` flag to `run_workflow.py` to generate the graph without executing steps.
+- Visualization features: live status polling, color-coded step types, bezier edges, GATE badges, sidecar nodes, inspector panel, search/filter, minimap, Export SVG, keyboard shortcuts (F/Esc//).
+- Fixed inspector close: canvas click and Esc now correctly dismiss the inspector panel.
+- Fixed `package_skill.py`: runtime directories (`artifacts`, `logs`, `state`, `audit`, `runs`) are now explicitly excluded from release archives to prevent data leaks.
+- Fixed `run_workflow.py --step`: removed duplicate `setup_run_audit()` call that created orphan audit runs without finalizing them.
+
 ## 1.0.1
 - Added project governance files: `LICENSE`, `CONTRIBUTING.md`, `SECURITY.md`, and `CODEOWNERS`.
 - Added repo maintenance tooling with `ruff`, `pre-commit`, and a packaging script for release archives.

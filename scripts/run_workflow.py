@@ -582,6 +582,17 @@ def finalize_run_audit(
     runtime = load_runtime_state(paths)
     runtime["active_run_id"] = None
     write_runtime_state(paths, runtime)
+    _write_workflow_viz(paths)
+
+
+def _write_workflow_viz(paths: WorkflowPaths) -> None:
+    try:
+        sys.path.insert(0, str(Path(__file__).parent))
+        from visualize_workflow import generate_html  # type: ignore[import]
+        html = generate_html(paths.workflow_dir)
+        (paths.workflow_dir / "workflow-graph.html").write_text(html, encoding="utf-8")
+    except Exception:
+        pass
 
 
 def verify_manifest_or_die(manifest: dict[str, Any], paths: WorkflowPaths) -> None:
@@ -1676,6 +1687,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--repair", action="store_true", help="Repair interrupted state so the workflow can resume."
     )
+    parser.add_argument(
+        "--visualize", action="store_true", help="Generate workflow-graph.html visualization and exit."
+    )
     return parser.parse_args(argv)
 
 
@@ -1694,6 +1708,10 @@ def main(argv: list[str]) -> int:
     with WorkflowLock(paths.lock_path):
         ensure_state(paths, manifest)
         reconcile_interrupted_steps(manifest, paths)
+        if args.visualize:
+            _write_workflow_viz(paths)
+            print(f"[visualize] Wrote {paths.workflow_dir / 'workflow-graph.html'}")
+            return 0
         if args.list:
             return list_steps(manifest, paths)
         if args.sidecars:
@@ -1727,20 +1745,6 @@ def main(argv: list[str]) -> int:
             if step is None:
                 print(f"Unknown step: {args.step}", file=sys.stderr)
                 return 1
-            current_status = read_tsv_state(paths.step_state_path).get(step["id"])
-            if current_status == "complete" and not args.dry_run:
-                print(
-                    f"Step {step['id']} is already complete. Use --reset first to re-run.",
-                    file=sys.stderr,
-                )
-                return 0
-            run_context = (
-                setup_run_audit(paths, manifest, policy)
-                if audit_enabled(manifest, policy) and not args.dry_run
-                else RunContext(
-                    run_id=None, run_dir=None, dry_run=args.dry_run, metrics={"steps": {}}
-                )
-            )
             current_status = read_tsv_state(paths.step_state_path).get(step["id"])
             if current_status == "complete" and not args.dry_run:
                 print(

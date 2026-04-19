@@ -75,6 +75,31 @@ This skill pushes the opposite direction: deterministic runtime, explicit state,
 - Prompt-asset pinning and sidecar output schemas
 - Benchmarks and tests for regression checking
 
+## Workflow Visualization
+
+Every run automatically generates `workflow-graph.html` — an n8n-style interactive DAG viewer — in the workflow directory. Open it in any browser, no server required.
+
+```bash
+# Generate or refresh the visualization without running the workflow
+python3 scripts/run_workflow.py <workflow-dir> --visualize
+
+# Or generate it directly
+python3 scripts/visualize_workflow.py --workflow-dir <workflow-dir>
+```
+
+**Features:**
+- Live-updating status via XHR poll (every 3 s) with **live / static** indicator
+- Color-coded nodes by step type (shell, test, python, json-validate, http-check, approval, …)
+- Bezier edges colored by source step status — green for complete, orange for waiting-approval
+- **GATE** badge on manual-approval steps
+- Sidecar AI advisor nodes anchored below their consumer
+- Click any node → inspector panel: type, status, script, dependencies, runtime metrics
+- Click empty canvas or press **Esc** to close inspector
+- **F** = fit-to-screen, **/** = search/filter, minimap, Export SVG
+- Progress bar: `N/total complete · M approvals`
+
+![Workflow Visualization](docs/visualization-preview.png)
+
 ## Repository Layout
 
 ```text
