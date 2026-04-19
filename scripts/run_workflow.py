@@ -1006,6 +1006,78 @@ def reject_mutation(paths: WorkflowPaths, mut_id: str) -> int:
     return 0
 
 
+_AUTO_HEAL_PROMPT_TEMPLATE = """\
+A step in a deterministic workflow failed. Propose a mutation to fix it.
+
+Step config:
+{step_json}
+
+Error output (last 2000 chars):
+{error_output}
+
+Respond with ONLY a mutation proposal block in this exact format:
+---PROPOSE_MUTATION---
+{{
+  "type": "modify_step",
+  "description": "<one-line description of the fix>",
+  "payload": {{
+    "step_id": "{step_id}",
+    "changes": {{
+      "retry_limit": <int if retry makes sense>,
+      "timeout_seconds": <int if timeout was the issue>
+    }}
+  }}
+}}
+---END_MUTATION---
+
+Only include fields that should actually change. If the failure is not fixable by
+modifying step parameters (e.g. it requires manual intervention), output nothing.
+"""
+
+
+def auto_heal_step(
+    step: dict[str, Any],
+    result: "StepResult",
+    paths: WorkflowPaths,
+    manifest: dict[str, Any],
+    run_context: "RunContext",
+) -> None:
+    """If auto_heal is enabled, ask Claude to propose a fix mutation for the failed step."""
+    if not (manifest.get("auto_heal") or step.get("auto_heal")):
+        return
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        return
+    step_id = step["id"]
+    log_path = paths.logs_dir / f"{step_id}.log"
+    error_output = ""
+    if log_path.exists():
+        text = log_path.read_text(encoding="utf-8", errors="replace")
+        error_output = text[-2000:] if len(text) > 2000 else text
+    prompt = _AUTO_HEAL_PROMPT_TEMPLATE.format(
+        step_json=json.dumps({k: v for k, v in step.items() if k != "auto_heal"}, indent=2),
+        error_output=error_output,
+        step_id=step_id,
+    )
+    try:
+        proc = subprocess.run(
+            [claude_bin, "-p", prompt, "--model", "claude-haiku-4-5-20251001"],
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        output = proc.stdout or ""
+    except Exception:
+        return
+    proposals = scan_mutation_proposals(output, "auto-heal", run_context)
+    if proposals:
+        store_mutation_proposals(paths, proposals)
+        print(
+            f"  🔧 auto-heal: stored {len(proposals)} proposal(s) for {step_id}"
+            f" — run --list-mutations to review"
+        )
+
+
 def enforce_path_contract(
     paths: WorkflowPaths, contract: dict[str, Any], *, allow_missing: bool = False
 ) -> tuple[bool, str]:
@@ -1351,6 +1423,147 @@ def run_mcp_step(
         return 1, "mcp-error"
 
 
+def expand_claude_template(template: str, paths: WorkflowPaths) -> str:
+    """Expand {{artifact:step-id}} (reads artifacts/{step-id}.out) and {{env:VAR}} in a prompt."""
+
+    def _replace(match: re.Match) -> str:  # type: ignore[type-arg]
+        expr = match.group(1)
+        if expr.startswith("env:"):
+            return os.environ.get(expr[4:], "")
+        if expr.startswith("artifact:"):
+            artifact_id = expr[9:]
+            artifact_path = paths.workflow_dir / "artifacts" / f"{artifact_id}.out"
+            if not artifact_path.exists():
+                raise ValueError(f"claude template: artifact not found: {artifact_id}.out")
+            return artifact_path.read_text(encoding="utf-8").strip()
+        return match.group(0)
+
+    return re.sub(r"\{\{([^}]+)\}\}", _replace, template)
+
+
+def validate_output_schema(response: str, schema: dict[str, Any]) -> tuple[bool, str]:
+    """Parse response as JSON and check required_keys from schema."""
+    required_keys = schema.get("required_keys", [])
+    if not required_keys:
+        return True, ""
+    try:
+        parsed = json.loads(response)
+    except json.JSONDecodeError:
+        return False, f"claude step output_schema: response is not valid JSON"
+    if not isinstance(parsed, dict):
+        return False, "claude step output_schema: response JSON must be an object"
+    missing = [k for k in required_keys if k not in parsed]
+    if missing:
+        return False, f"claude step output_schema: missing required keys: {missing}"
+    return True, ""
+
+
+def run_claude_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Run a claude step: expand template, call Claude CLI or SDK, write artifact."""
+    step_id = step["id"]
+    model = step.get("model", "claude-sonnet-4-6")
+    timeout_seconds = int(step.get("timeout_seconds", 300))
+
+    try:
+        prompt = expand_claude_template(step.get("prompt", ""), paths)
+    except ValueError as exc:
+        atomic_write_text(log_path, f"[runner] claude template expansion error: {exc}\n")
+        return 1, "template-error"
+
+    response_text: str | None = None
+    claude_bin = shutil.which("claude")
+
+    if claude_bin:
+        try:
+            result = subprocess.run(
+                [claude_bin, "-p", prompt, "--model", model],
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                cwd=paths.workflow_dir,
+            )
+            response_text = result.stdout
+            if result.returncode != 0:
+                msg = f"[runner] claude CLI exited {result.returncode}\n{result.stderr}\n"
+                atomic_write_text(log_path, msg)
+                return result.returncode, "claude-error"
+        except subprocess.TimeoutExpired:
+            atomic_write_text(log_path, "[runner] claude step timed out\n")
+            return 1, "timeout"
+    else:
+        try:
+            import anthropic  # type: ignore[import]  # noqa: PLC0415
+
+            client = anthropic.Anthropic()
+            msg = client.messages.create(
+                model=model,
+                max_tokens=4096,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            response_text = msg.content[0].text
+        except ImportError:
+            atomic_write_text(
+                log_path,
+                "[runner] claude step requires the claude CLI or: pip install anthropic\n",
+            )
+            return 1, "missing-dependency"
+        except Exception as exc:
+            atomic_write_text(log_path, f"[runner] anthropic SDK error: {exc}\n")
+            return 1, "claude-error"
+
+    artifact_path = paths.workflow_dir / "artifacts" / f"{step_id}.out"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(artifact_path, (response_text or "") + "\n")
+    atomic_write_text(log_path, f"[runner] claude step completed.\n{response_text or ''}\n")
+
+    output_schema = step.get("output_schema")
+    if output_schema and isinstance(output_schema, dict):
+        ok, err = validate_output_schema(response_text or "", output_schema)
+        if not ok:
+            atomic_write_text(log_path, f"[runner] {err}\n")
+            return 1, "schema-violation"
+
+    return 0, "claude"
+
+
+def run_branch_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str, list[str]]:
+    """Run condition script. Returns (returncode, category, skipped_step_ids)."""
+    condition_script = resolve_safe_path(paths.workflow_dir, step["condition"])
+    timeout_seconds = int(step.get("timeout_seconds", 30))
+    on_true: list[str] = step.get("on_true", [])
+    on_false: list[str] = step.get("on_false", [])
+    try:
+        with log_path.open("w", encoding="utf-8") as handle:
+            result = subprocess.run(
+                ["bash", str(condition_script)],
+                cwd=paths.workflow_dir,
+                text=True,
+                stdout=handle,
+                stderr=subprocess.STDOUT,
+                check=False,
+                timeout=timeout_seconds,
+            )
+        branch_taken = "true" if result.returncode == 0 else "false"
+        skipped = on_false if result.returncode == 0 else on_true
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(f"\n[branch] condition exited {result.returncode} → branch={branch_taken}\n")
+        return 0, f"branch:{branch_taken}", skipped
+    except subprocess.TimeoutExpired:
+        atomic_write_text(log_path, "[runner] branch condition timed out\n")
+        return 1, "timeout", []
+    except Exception as exc:
+        atomic_write_text(log_path, f"[runner] branch condition error: {exc}\n")
+        return 1, "branch-error", []
+
+
 def run_command_step(
     step: dict[str, Any],
     paths: WorkflowPaths,
@@ -1360,6 +1573,8 @@ def run_command_step(
 ) -> tuple[int, str]:
     if step["type"] == "mcp":
         return run_mcp_step(step, paths, manifest, policy, log_path)
+    if step["type"] == "claude":
+        return run_claude_step(step, paths, log_path)
     working_directory = step.get("working_directory", manifest.get("working_directory", "."))
     cwd = resolve_safe_path(paths.workflow_dir, working_directory)
     env = build_step_env(policy)
@@ -1612,7 +1827,14 @@ def execute_single_step(
                 f"BEGIN\t{step_id}\tattempt={attempt}\t{step.get('script', '-')}",
             )
 
-        returncode, category = run_command_step(step, paths, manifest, policy, log_path)
+        if step["type"] == "branch":
+            returncode, category, skipped_ids = run_branch_step(step, paths, log_path)
+            if returncode == 0:
+                for sid in skipped_ids:
+                    mark_step_status(paths, sid, "skipped")
+                    print(f"  ↷ skipped  {sid}  (branch not taken)", flush=True)
+        else:
+            returncode, category = run_command_step(step, paths, manifest, policy, log_path)
         duration_seconds = round(time.monotonic() - started_at, 3)
         if run_context.run_dir is not None and log_path.exists():
             shutil.copyfile(log_path, run_context.run_dir / "logs" / f"{step_id}.log")
@@ -1700,6 +1922,7 @@ def execute_single_step(
     if isinstance(rollback, dict) and rollback.get("when") == "on_failure":
         run_rollback(step, paths, manifest, policy, run_context)
     mark_step_status(paths, step_id, "failed")
+    auto_heal_step(step, last_result, paths, manifest, run_context)
     update_runtime_step(
         paths,
         step_id,
@@ -1820,8 +2043,9 @@ def run_many(
         if audit_enabled(manifest, policy)
         else RunContext(run_id=None, run_dir=None, dry_run=False, metrics={"steps": {}})
     )
-    pending = [step_id for step_id in order if step_state.get(step_id) != "complete"]
-    completed = {step_id for step_id, status in step_state.items() if status == "complete"}
+    done_statuses = {"complete", "skipped"}
+    pending = [step_id for step_id in order if step_state.get(step_id) not in done_statuses]
+    completed = {step_id for step_id, status in step_state.items() if status in done_statuses}
     running: dict[concurrent.futures.Future[StepResult], str] = {}
     stop_launching = False
     failure_code = 0
@@ -1888,6 +2112,15 @@ def run_many(
                 step_id = running.pop(future)
                 result = future.result()
                 record_metrics(paths, run_context, result)
+                # Refresh skipped set in case a branch step just wrote new skipped entries
+                fresh_state = read_tsv_state(paths.step_state_path)
+                newly_skipped = {
+                    sid for sid, st in fresh_state.items() if st == "skipped" and sid not in completed
+                }
+                for sid in newly_skipped:
+                    completed.add(sid)
+                    if sid in pending:
+                        pending.remove(sid)
                 if result.returncode == 0:
                     dur = f"  ({result.duration_seconds:.1f}s)" if result.duration_seconds else ""
                     print(f"  ✓ complete {step_id}{dur}", flush=True)
@@ -1914,8 +2147,9 @@ def run_many(
 
 def first_incomplete_step(manifest: dict[str, Any], paths: WorkflowPaths) -> str | None:
     step_state = read_tsv_state(paths.step_state_path)
+    done_statuses = {"complete", "skipped"}
     for step_id in simulate_step_order(manifest):
-        if step_state.get(step_id) != "complete":
+        if step_state.get(step_id) not in done_statuses:
             return step_id
     return None
 
@@ -2077,6 +2311,148 @@ def reset_state(manifest: dict[str, Any], paths: WorkflowPaths) -> int:
     return list_steps(manifest, paths)
 
 
+def install_triggers(manifest: dict[str, Any], paths: WorkflowPaths) -> int:
+    """Delegate to schedule_workflow.py."""
+    import importlib.util  # noqa: PLC0415
+
+    schedule_script = Path(__file__).resolve().parent / "schedule_workflow.py"
+    spec = importlib.util.spec_from_file_location("schedule_workflow", schedule_script)
+    if spec is None or spec.loader is None:
+        print("[triggers] Could not load schedule_workflow.py", file=sys.stderr)
+        return 1
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod.install_triggers(manifest, paths.workflow_dir)
+
+
+def generate_dashboard(paths: WorkflowPaths) -> int:
+    """Delegate to dashboard.py."""
+    import importlib.util  # noqa: PLC0415
+
+    dashboard_script = Path(__file__).resolve().parent / "dashboard.py"
+    if not dashboard_script.exists():
+        print("[dashboard] dashboard.py not found.", file=sys.stderr)
+        return 1
+    spec = importlib.util.spec_from_file_location("dashboard", dashboard_script)
+    if spec is None or spec.loader is None:
+        print("[dashboard] Could not load dashboard.py", file=sys.stderr)
+        return 1
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[union-attr]
+    return mod.run_dashboard(paths.workflow_dir)
+
+
+_GENERATE_SYSTEM_PROMPT = """\
+You are a workflow architect for the deterministic-workflow-builder skill.
+Generate a valid workflow.json manifest (schema_version 4) for the description below.
+
+Required top-level fields:
+  schema_version (4), workflow_name (string), version (1), goal (string),
+  policy_pack ("strict-prod"), graph ({"execution_model": "dag"}), steps (list).
+
+Required per-step fields:
+  id (kebab-case), name (string), type ("shell"), script (string path under steps/),
+  success_gate (""), gate_type ("artifact"), requires_approval (false),
+  retry_limit (0), timeout_seconds (300), depends_on (list of step ids).
+
+Rules:
+- First step has depends_on: []
+- Each subsequent step depends_on the previous step's id (or whichever makes logical sense)
+- script paths follow the pattern "steps/{id}.sh"
+- Use only the shell step type unless a step needs human review (use requires_approval: true)
+- Return ONLY a JSON code block, no explanation.
+"""
+
+
+def extract_json_from_claude_output(output: str) -> dict[str, Any]:
+    """Extract first ```json...``` block or first bare JSON object from Claude output."""
+    fenced = re.search(r"```(?:json)?\s*(\{[\s\S]*?\})\s*```", output)
+    if fenced:
+        return json.loads(fenced.group(1))
+    first_brace = output.find("{")
+    last_brace = output.rfind("}")
+    if first_brace != -1 and last_brace > first_brace:
+        return json.loads(output[first_brace : last_brace + 1])
+    raise ValueError("No JSON object found in Claude output")
+
+
+def _slugify(text: str) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60]
+
+
+def generate_workflow(description: str, output_dir: Path) -> int:
+    """Generate a workflow.json from a natural language description using Claude."""
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        print("[generate] Error: 'claude' CLI not found. Install Claude Code to use --generate.")
+        return 1
+
+    full_prompt = f"{_GENERATE_SYSTEM_PROMPT}\nDescription: {description}"
+    print(f"[generate] Calling Claude to design workflow: {description!r}")
+    try:
+        result = subprocess.run(
+            [claude_bin, "-p", full_prompt, "--model", "claude-sonnet-4-6"],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+    except subprocess.TimeoutExpired:
+        print("[generate] Error: Claude timed out after 120s.")
+        return 1
+
+    if result.returncode != 0:
+        print(f"[generate] Claude exited {result.returncode}: {result.stderr[:200]}")
+        return 1
+
+    try:
+        manifest = extract_json_from_claude_output(result.stdout)
+    except (ValueError, json.JSONDecodeError) as exc:
+        print(f"[generate] Failed to parse JSON from Claude output: {exc}")
+        print("Claude output was:")
+        print(result.stdout[:500])
+        return 1
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = output_dir / "workflow.json"
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    issues = validate_manifest(manifest, manifest_path, output_dir)
+    errors = [i for i in issues if i.severity == "error"]
+    if errors:
+        print(f"[generate] Warning: generated manifest has {len(errors)} validation issue(s):")
+        for issue in errors[:5]:
+            print(f"  - {issue.message}")
+
+    for subdir in ("steps", "artifacts", "state", "logs", "audit/runs"):
+        (output_dir / subdir).mkdir(parents=True, exist_ok=True)
+
+    run_sh = output_dir / "run_workflow.sh"
+    runner_path = Path(__file__).resolve()
+    run_sh.write_text(
+        f"#!/usr/bin/env bash\nexec python3 {runner_path} \"$(dirname \"$0\")\" \"$@\"\n",
+        encoding="utf-8",
+    )
+    run_sh.chmod(0o755)
+
+    steps = manifest.get("steps", [])
+    for step in steps:
+        script_rel = step.get("script", "")
+        if script_rel:
+            script_path = output_dir / script_rel
+            script_path.parent.mkdir(parents=True, exist_ok=True)
+            if not script_path.exists():
+                script_path.write_text(
+                    f"#!/usr/bin/env bash\n# TODO: implement {step.get('id', 'step')}\necho 'done'\n",
+                    encoding="utf-8",
+                )
+                script_path.chmod(0o755)
+
+    print(f"[generate] Created workflow at {output_dir}/")
+    print(f"  workflow.json  ({len(steps)} steps)")
+    print(f"  run_workflow.sh")
+    return 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Python execution engine for deterministic workflows."
@@ -2134,11 +2510,38 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--approve-mutation", default=None, help="Apply a pending mutation by id.")
     parser.add_argument("--reject-mutation", default=None, help="Reject a pending mutation by id.")
+    parser.add_argument(
+        "--generate",
+        default=None,
+        metavar="DESCRIPTION",
+        help="Generate a workflow.json from a natural language description.",
+    )
+    parser.add_argument(
+        "--output-dir",
+        default=None,
+        dest="output_dir",
+        help="Output directory for --generate (defaults to slugified description).",
+    )
+    parser.add_argument(
+        "--install-triggers",
+        action="store_true",
+        help="Install schedule/webhook triggers defined in workflow.json.",
+    )
+    parser.add_argument(
+        "--dashboard",
+        action="store_true",
+        help="Generate and open the run history dashboard.",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+
+    if args.generate:
+        out = Path(args.output_dir) if args.output_dir else Path(_slugify(args.generate))
+        return generate_workflow(args.generate, out)
+
     workflow_dir_raw = args.workflow_dir or args.workflow_dir_flag or "."
     workflow_dir = resolve_workflow_dir(Path(workflow_dir_raw))
     paths = build_paths(workflow_dir)
@@ -2191,6 +2594,10 @@ def main(argv: list[str]) -> int:
             return approve_mutation(paths, args.approve_mutation)
         if args.reject_mutation is not None:
             return reject_mutation(paths, args.reject_mutation)
+        if args.install_triggers:
+            return install_triggers(manifest, paths)
+        if args.dashboard:
+            return generate_dashboard(paths)
         if args.step is not None:
             step = get_steps_by_id(manifest).get(args.step)
             if step is None:

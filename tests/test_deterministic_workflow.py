@@ -1305,5 +1305,342 @@ class SidecarMutationTests(unittest.TestCase):
             self.assertEqual(len(updated["steps"]), original_step_count)
 
 
+RUN_SCRIPT = SKILL_DIR / "scripts" / "run_workflow.py"
+SCHEDULE_SCRIPT = SKILL_DIR / "scripts" / "schedule_workflow.py"
+DASHBOARD_SCRIPT = SKILL_DIR / "scripts" / "dashboard.py"
+
+
+def _scaffold_minimal(root: Path, name: str, extra_steps: list[dict] | None = None) -> Path:
+    """Create a minimal valid workflow for new-feature tests."""
+    import sys  # noqa: PLC0415
+
+    result = run_command(
+        "python3",
+        str(INIT_SCRIPT),
+        name,
+        "--path",
+        str(root),
+        "--steps",
+        "fetch",
+    )
+    workflow_dir = root / name
+    if extra_steps:
+        manifest_path = workflow_dir / "workflow.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        manifest["steps"].extend(extra_steps)
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+    return workflow_dir
+
+
+class ClaudeStepTests(unittest.TestCase):
+    """Tests for type:claude steps (mocked via a fake 'claude' binary)."""
+
+    def _fake_claude_bin(self, tmp: Path, response: str) -> Path:
+        """Write a fake claude binary that prints `response` and exits 0."""
+        fake = tmp / "claude"
+        fake.write_text(f"#!/usr/bin/env bash\necho '{response}'\n")
+        fake.chmod(0o755)
+        return fake
+
+    def test_claude_step_writes_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            fake_claude = self._fake_claude_bin(tmp, "hello from claude")
+
+            result = run_command(
+                "python3",
+                str(INIT_SCRIPT), "claude-wf", "--path", str(tmp), "--steps", "fetch",
+            )
+            workflow_dir = tmp / "claude-wf"
+            manifest_path = workflow_dir / "workflow.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["steps"].append({
+                "id": "summarise",
+                "name": "Summarise output",
+                "type": "claude",
+                "prompt": "Say hello",
+                "success_gate": "",
+                "gate_type": "artifact",
+                "requires_approval": False,
+                "retry_limit": 0,
+                "timeout_seconds": 30,
+                "depends_on": [],
+            })
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+            env = dict(os.environ)
+            env["PATH"] = str(tmp) + ":" + env.get("PATH", "")
+            result = run_command(
+                "python3", str(RUN_SCRIPT), str(workflow_dir), "--step", "summarise",
+                env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            artifact = workflow_dir / "artifacts" / "summarise.out"
+            self.assertTrue(artifact.exists(), "Artifact not written")
+            self.assertIn("hello", artifact.read_text(encoding="utf-8"))
+
+    def test_claude_step_missing_prompt_fails_validation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            result = run_command(
+                "python3",
+                str(INIT_SCRIPT), "claude-validate-wf", "--path", str(tmp), "--steps", "fetch",
+            )
+            workflow_dir = tmp / "claude-validate-wf"
+            manifest_path = workflow_dir / "workflow.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["steps"].append({
+                "id": "no-prompt",
+                "name": "Missing prompt",
+                "type": "claude",
+                "success_gate": "",
+                "gate_type": "artifact",
+                "requires_approval": False,
+                "retry_limit": 0,
+                "timeout_seconds": 30,
+                "depends_on": [],
+            })
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            result = run_command(
+                "python3", str(RUN_SCRIPT), str(workflow_dir), "--list",
+            )
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("prompt", result.stderr + result.stdout)
+
+    def test_extract_json_from_claude_output(self) -> None:
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from run_workflow import extract_json_from_claude_output  # type: ignore[import]  # noqa: PLC0415
+
+        # fenced block
+        output = 'Sure!\n```json\n{"a": 1}\n```\nDone.'
+        self.assertEqual(extract_json_from_claude_output(output), {"a": 1})
+
+        # bare JSON
+        output2 = 'Here is the JSON: {"b": 2} — end'
+        self.assertEqual(extract_json_from_claude_output(output2), {"b": 2})
+
+
+class BranchStepTests(unittest.TestCase):
+    """Tests for type:branch steps."""
+
+    def _make_branch_workflow(self, root: Path, name: str, condition_exit: int) -> Path:
+        result = run_command(
+            "python3", str(INIT_SCRIPT), name, "--path", str(root), "--steps", "fetch",
+        )
+        workflow_dir = root / name
+
+        cond_script = workflow_dir / "steps" / "check.sh"
+        cond_script.write_text(
+            f"#!/usr/bin/env bash\nexit {condition_exit}\n", encoding="utf-8"
+        )
+        cond_script.chmod(0o755)
+
+        for sid in ("on-true-step", "on-false-step"):
+            s = workflow_dir / "steps" / f"{sid}.sh"
+            s.write_text(f"#!/usr/bin/env bash\necho '{sid} ran'\n")
+            s.chmod(0o755)
+
+        manifest_path = workflow_dir / "workflow.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # Clear init-generated contracts on existing steps so they don't require artifacts
+        for step in manifest["steps"]:
+            step["produces"] = []
+            step["consumes"] = []
+            step["validation_checks"] = []
+        manifest["steps"].extend([
+            {
+                "id": "branch-gate",
+                "name": "Branch gate",
+                "type": "branch",
+                "condition": "steps/check.sh",
+                "on_true": ["on-true-step"],
+                "on_false": ["on-false-step"],
+                "success_gate": "",
+                "gate_type": "artifact",
+                "requires_approval": False,
+                "retry_limit": 0,
+                "timeout_seconds": 10,
+                "depends_on": ["01-fetch"],
+            },
+            {
+                "id": "on-true-step",
+                "name": "On-true step",
+                "type": "shell",
+                "script": "steps/on-true-step.sh",
+                "success_gate": "",
+                "gate_type": "artifact",
+                "requires_approval": False,
+                "retry_limit": 0,
+                "timeout_seconds": 10,
+                "depends_on": ["branch-gate"],
+            },
+            {
+                "id": "on-false-step",
+                "name": "On-false step",
+                "type": "shell",
+                "script": "steps/on-false-step.sh",
+                "success_gate": "",
+                "gate_type": "artifact",
+                "requires_approval": False,
+                "retry_limit": 0,
+                "timeout_seconds": 10,
+                "depends_on": ["branch-gate"],
+            },
+        ])
+        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+        # Make 01-fetch succeed
+        fetch_sh = workflow_dir / "steps" / "01-fetch.sh"
+        fetch_sh.write_text("#!/usr/bin/env bash\necho ok\n")
+        fetch_sh.chmod(0o755)
+
+        return workflow_dir
+
+    def test_branch_on_true_skips_false_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            workflow_dir = self._make_branch_workflow(tmp, "branch-true-wf", condition_exit=0)
+            result = run_command("python3", str(RUN_SCRIPT), str(workflow_dir))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            state = (workflow_dir / "state" / "step-status.tsv").read_text()
+            self.assertIn("on-true-step\tcomplete", state)
+            self.assertIn("on-false-step\tskipped", state)
+
+    def test_branch_on_false_skips_true_steps(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            workflow_dir = self._make_branch_workflow(tmp, "branch-false-wf", condition_exit=1)
+            result = run_command("python3", str(RUN_SCRIPT), str(workflow_dir))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            state = (workflow_dir / "state" / "step-status.tsv").read_text()
+            self.assertIn("on-false-step\tcomplete", state)
+            self.assertIn("on-true-step\tskipped", state)
+
+    def test_branch_validation_requires_condition_field(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            result = run_command(
+                "python3", str(INIT_SCRIPT), "branch-val-wf", "--path", str(tmp), "--steps", "fetch",
+            )
+            workflow_dir = tmp / "branch-val-wf"
+            manifest_path = workflow_dir / "workflow.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["steps"].append({
+                "id": "bad-branch",
+                "name": "Bad branch",
+                "type": "branch",
+                # missing 'condition', 'on_true', 'on_false'
+                "success_gate": "",
+                "gate_type": "artifact",
+                "requires_approval": False,
+                "retry_limit": 0,
+                "timeout_seconds": 10,
+                "depends_on": [],
+            })
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            result = run_command("python3", str(RUN_SCRIPT), str(workflow_dir), "--list")
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("condition", result.stderr + result.stdout)
+
+
+class TriggerTests(unittest.TestCase):
+    """Tests for schedule/webhook trigger installation."""
+
+    def test_triggers_schema_valid(self) -> None:
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
+
+        manifest = {
+            "schema_version": 4, "workflow_name": "trig-wf", "version": 1,
+            "goal": "test", "policy_pack": "strict-prod",
+            "graph": {"execution_model": "dag"}, "steps": [],
+            "triggers": [
+                {"type": "schedule", "cron": "0 9 * * 1-5"},
+                {"type": "webhook", "port": 9090},
+            ],
+        }
+        from pathlib import Path as P  # noqa: PLC0415, N814
+        issues = validate_manifest(manifest, P("/fake/workflow.json"))
+        errors = [i for i in issues if i.severity == "error" and "trigger" in i.message.lower()]
+        self.assertEqual(errors, [], [i.message for i in errors])
+
+    def test_triggers_schema_invalid_type(self) -> None:
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
+
+        manifest = {
+            "schema_version": 4, "workflow_name": "bad-trig", "version": 1,
+            "goal": "test", "policy_pack": "strict-prod",
+            "graph": {"execution_model": "dag"}, "steps": [],
+            "triggers": [{"type": "unknown-type"}],
+        }
+        from pathlib import Path as P  # noqa: PLC0415, N814
+        issues = validate_manifest(manifest, P("/fake/workflow.json"))
+        errors = [i for i in issues if i.severity == "error"]
+        self.assertTrue(any("trigger" in i.message.lower() for i in errors))
+
+    def test_webhook_server_script_created(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            import sys  # noqa: PLC0415
+            sys.path.insert(0, str(SKILL_DIR / "scripts"))
+            from schedule_workflow import install_webhook_trigger  # type: ignore[import]  # noqa: PLC0415
+
+            workflow_dir = tmp / "webhook-wf"
+            workflow_dir.mkdir()
+            code = install_webhook_trigger({"type": "webhook", "port": 9999}, workflow_dir)
+            self.assertEqual(code, 0)
+            server_script = workflow_dir / "scripts" / "webhook_server.py"
+            self.assertTrue(server_script.exists())
+            content = server_script.read_text(encoding="utf-8")
+            self.assertIn("9999", content)
+
+
+class DashboardTests(unittest.TestCase):
+    """Tests for the run history dashboard."""
+
+    def test_dashboard_generates_html_with_run_data(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            import sys  # noqa: PLC0415
+            sys.path.insert(0, str(SKILL_DIR / "scripts"))
+            from dashboard import load_all_runs, generate_dashboard_html  # type: ignore[import]  # noqa: PLC0415
+
+            audit_root = tmp / "audit"
+            run_dir = audit_root / "runs" / "run-0001"
+            run_dir.mkdir(parents=True)
+            metrics = {
+                "started_at": "2025-01-01T10:00:00Z",
+                "ended_at": "2025-01-01T10:00:42Z",
+                "status": "complete",
+                "steps": {
+                    "fetch": {"duration_seconds": 3.2, "returncode": 0, "status": "complete"},
+                },
+            }
+            (run_dir / "metrics.json").write_text(json.dumps(metrics), encoding="utf-8")
+
+            runs = load_all_runs(audit_root)
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0]["run_id"], "run-0001")
+            self.assertEqual(runs[0]["status"], "complete")
+
+            html = generate_dashboard_html(runs, "test-workflow")
+            self.assertIn("run-0001", html)
+            self.assertIn("test-workflow", html)
+
+    def test_dashboard_empty_runs_shows_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            import sys  # noqa: PLC0415
+            sys.path.insert(0, str(SKILL_DIR / "scripts"))
+            from dashboard import generate_dashboard_html  # type: ignore[import]  # noqa: PLC0415
+
+            html = generate_dashboard_html([], "empty-wf")
+            self.assertIn("No runs recorded", html)
+
+
 if __name__ == "__main__":
     unittest.main()

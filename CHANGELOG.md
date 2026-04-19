@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.1.0
+- Feature A — `type: "claude"` step: run a Claude prompt as a workflow step with `{{artifact:id}}` / `{{env:VAR}}` template expansion, optional `output_schema` JSON validation, and automatic artifact capture. Calls claude CLI; falls back to anthropic SDK.
+- Feature B — `--generate "description"`: generate a full `workflow.json` + scaffolded directory from a natural language description using Claude.
+- Feature C — Auto-heal on step failure: when `"auto_heal": true` is set on a workflow or step, Claude automatically proposes a mutation on failure. Proposal stored as a pending mutation for human review.
+- Feature D — `type: "branch"` step: conditional DAG branching via a condition script (exit 0 = true path). Unchosen-branch steps are marked `skipped` and treated as complete for dependency resolution.
+- Feature E — Trigger system: new `triggers` array in `workflow.json` supports `schedule` (cron) and `webhook` (HTTP) triggers. `--install-triggers` installs launchd plists on macOS or crontab entries on Linux. New `scripts/schedule_workflow.py` and auto-generated `webhook_server.py`.
+- Feature F — Run history dashboard: `--dashboard` generates a self-contained `dashboard.html` showing all past runs (status, duration, step breakdown) with links to per-run visualizations. New `scripts/dashboard.py`.
+- 11 new tests; 42/42 pass.
+
 ## 1.0.3
 - Feature 2 — MCP steps: new `type: "mcp"` step executes a tool call via the MCP protocol using the `.mcp.json` server registry. Params support `{{artifact:id}}` and `{{env:VAR}}` template expansion. Added `assets/mcp-servers.json.example`.
 - Feature 3 — Sidecar mutation proposals: sidecar scripts can emit structured JSON proposals (`add_step` / `modify_step` / `remove_step`) via a `---PROPOSE_MUTATION---` sentinel. Runner captures and stores proposals in `state/proposed-mutations.json`. New CLI flags: `--list-mutations`, `--approve-mutation ID`, `--reject-mutation ID`.

@@ -43,6 +43,8 @@ VALID_STEP_TYPES = {
     "git-diff-check",
     "manual-approval",
     "mcp",
+    "claude",
+    "branch",
 }
 VALID_FAILURE_POLICIES = {"stop", "continue"}
 VALID_SIDECAR_KINDS = {"prompt", "skill"}
@@ -520,6 +522,50 @@ def validate_manifest(
                         f"Step `{step_id}` script must be a string when provided.",
                     )
 
+            if step_type == "claude":
+                if not isinstance(step.get("prompt"), str) or not step.get("prompt"):
+                    _add_issue(
+                        issues,
+                        "error",
+                        manifest_path,
+                        f"Step `{step_id}` of type `claude` must define non-empty `prompt`.",
+                    )
+                if "output_schema" in step and not isinstance(step["output_schema"], dict):
+                    _add_issue(
+                        issues,
+                        "error",
+                        manifest_path,
+                        f"Step `{step_id}` field `output_schema` must be an object.",
+                    )
+
+            if step_type == "branch":
+                if not isinstance(step.get("condition"), str) or not step.get("condition"):
+                    _add_issue(
+                        issues,
+                        "error",
+                        manifest_path,
+                        f"Step `{step_id}` of type `branch` must define non-empty `condition` script.",
+                    )
+                for branch_field in ("on_true", "on_false"):
+                    branch_val = step.get(branch_field)
+                    if not isinstance(branch_val, list):
+                        _add_issue(
+                            issues,
+                            "error",
+                            manifest_path,
+                            f"Step `{step_id}` of type `branch` must define list `{branch_field}`.",
+                        )
+                    else:
+                        all_step_ids = {s.get("id") for s in manifest.get("steps", [])}
+                        for ref_id in branch_val:
+                            if ref_id not in all_step_ids:
+                                _add_issue(
+                                    issues,
+                                    "error",
+                                    manifest_path,
+                                    f"Step `{step_id}` `{branch_field}` references unknown step `{ref_id}`.",
+                                )
+
             produces = step.get("produces", [])
             consumes = step.get("consumes", [])
             commands = step.get("commands", [])
@@ -792,6 +838,32 @@ def validate_manifest(
                 manifest_path,
                 f"Sidecar `{sidecar_id}` must define non-empty `validator`.",
             )
+
+    triggers = manifest.get("triggers", [])
+    if not isinstance(triggers, list):
+        _add_issue(issues, "error", manifest_path, "`triggers` must be a list.")
+    else:
+        valid_trigger_types = {"schedule", "webhook"}
+        for i, trigger in enumerate(triggers):
+            if not isinstance(trigger, dict):
+                _add_issue(issues, "error", manifest_path, f"Trigger #{i} must be an object.")
+                continue
+            ttype = trigger.get("type")
+            if ttype not in valid_trigger_types:
+                _add_issue(
+                    issues,
+                    "error",
+                    manifest_path,
+                    f"Trigger #{i} has invalid `type` `{ttype}`; must be one of {sorted(valid_trigger_types)}.",
+                )
+            if ttype == "schedule" and not isinstance(trigger.get("cron"), str):
+                _add_issue(
+                    issues, "error", manifest_path, f"Schedule trigger #{i} must define string `cron`."
+                )
+            if ttype == "webhook" and not isinstance(trigger.get("port"), int):
+                _add_issue(
+                    issues, "error", manifest_path, f"Webhook trigger #{i} must define integer `port`."
+                )
 
     return issues
 
