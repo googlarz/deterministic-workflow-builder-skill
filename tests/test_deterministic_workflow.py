@@ -1936,6 +1936,128 @@ class SkillDiscoveryTests(unittest.TestCase):
         self.assertTrue(any("skill" in i.message.lower() for i in errors))
 
 
+class BrowserAndComputerUseTests(unittest.TestCase):
+    """Tests for type:browser and type:computer-use steps."""
+
+    RUN_SCRIPT = SKILL_DIR / "scripts" / "run_workflow.py"
+
+    def _make_workflow(self, step_type: str, tmp: Path) -> Path:
+        # Use init script to get a fully schema-valid manifest, then patch in our step
+        run_command("python3", str(INIT_SCRIPT), "wf", "--path", str(tmp), "--steps", "base-step")
+        wf = tmp / "wf"
+        manifest_path = wf / "workflow.json"
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        # Replace the generated step with our step type
+        manifest["steps"] = [{
+            "id": "step1",
+            "name": "Step 1",
+            "type": step_type,
+            "instruction": "Take a screenshot and describe what you see.",
+            "success_gate": "",
+            "gate_type": "artifact",
+            "requires_approval": False,
+            "retry_limit": 0,
+            "timeout_seconds": 30,
+            "produces": [],
+            "consumes": [],
+            "validation_checks": [],
+        }]
+        manifest_path.write_text(json.dumps(manifest, indent=2))
+        return wf
+
+    def test_browser_step_fails_without_claude(self) -> None:
+        import sys as _sys  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            wf = self._make_workflow("browser", tmp)
+            # PATH has only tmp (no claude binary there)
+            env = os.environ.copy()
+            env["PATH"] = str(tmp) + ":/usr/bin:/bin"
+            result = subprocess.run(
+                [_sys.executable, str(self.RUN_SCRIPT), str(wf), "--step", "step1"],
+                capture_output=True, text=True, env=env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            log = (wf / "logs" / "step1.log").read_text()
+            self.assertIn("claude", log.lower())
+
+    def test_computer_use_step_fails_without_claude(self) -> None:
+        import sys as _sys  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            wf = self._make_workflow("computer-use", tmp)
+            env = os.environ.copy()
+            env["PATH"] = str(tmp) + ":/usr/bin:/bin"
+            result = subprocess.run(
+                [_sys.executable, str(self.RUN_SCRIPT), str(wf), "--step", "step1"],
+                capture_output=True, text=True, env=env,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            log = (wf / "logs" / "step1.log").read_text()
+            self.assertIn("claude", log.lower())
+
+    def test_browser_schema_requires_instruction(self) -> None:
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
+        from pathlib import Path as P  # noqa: PLC0415, N814
+
+        manifest = {
+            "schema_version": 4, "workflow_name": "b-val", "version": 1,
+            "goal": "test", "policy_pack": "strict-prod",
+            "steps": [{
+                "id": "b1", "name": "b1", "type": "browser",
+                # missing instruction
+                "success_gate": "", "gate_type": "artifact",
+                "requires_approval": False, "retry_limit": 0, "timeout_seconds": 30,
+            }],
+        }
+        issues = validate_manifest(manifest, P("/fake/workflow.json"))
+        errors = [i for i in issues if i.severity == "error"]
+        self.assertTrue(any("instruction" in i.message.lower() for i in errors))
+
+    def test_computer_use_schema_requires_instruction(self) -> None:
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
+        from pathlib import Path as P  # noqa: PLC0415, N814
+
+        manifest = {
+            "schema_version": 4, "workflow_name": "cu-val", "version": 1,
+            "goal": "test", "policy_pack": "strict-prod",
+            "steps": [{
+                "id": "cu1", "name": "cu1", "type": "computer-use",
+                # missing instruction
+                "success_gate": "", "gate_type": "artifact",
+                "requires_approval": False, "retry_limit": 0, "timeout_seconds": 30,
+            }],
+        }
+        issues = validate_manifest(manifest, P("/fake/workflow.json"))
+        errors = [i for i in issues if i.severity == "error"]
+        self.assertTrue(any("instruction" in i.message.lower() for i in errors))
+
+    def test_browser_step_with_fake_claude(self) -> None:
+        import sys as _sys  # noqa: PLC0415
+        import tempfile  # noqa: PLC0415
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            wf = self._make_workflow("browser", tmp)
+            fake = tmp / "claude"
+            fake.write_text('#!/usr/bin/env bash\necho "Page title: Example Domain"\n')
+            fake.chmod(0o755)
+            env = os.environ.copy()
+            env["PATH"] = str(tmp) + ":" + env.get("PATH", "")
+            result = subprocess.run(
+                [_sys.executable, str(self.RUN_SCRIPT), str(wf), "--step", "step1"],
+                capture_output=True, text=True, env=env,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            artifact = (wf / "artifacts" / "step1.out").read_text()
+            self.assertIn("Example Domain", artifact)
+
+
 class N8nImportTests(unittest.TestCase):
     """Tests for --import-n8n / import_n8n.py."""
 

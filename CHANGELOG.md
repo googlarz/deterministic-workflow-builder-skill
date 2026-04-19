@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.5.0
+- `type: "browser"` — Chrome MCP-backed browser automation step. Claude navigates, clicks, fills forms, reads page content, inspects network, and captures results — all driven by a natural language `instruction` field with full artifact template expansion. No API required.
+- `type: "computer-use"` — Desktop automation step via computer-use MCP. Claude controls any native app via screenshots, mouse, keyboard, and scroll. Automates workflows that have no API and no browser interface.
+- Both step types write their output as artifacts, support `output_artifact` naming, full retry/timeout/auto-heal, and integrate with the approval gate and audit system.
+- 5 new tests; 66/66 pass.
+
 ## 1.4.0
 - `--import-n8n <file>` — Convert any n8n workflow export JSON to a `workflow.json`. Maps 30+ n8n node types: `executeCommand` → `shell`, `httpRequest` → `http`, `if` → `branch`, `switch` → `switch`, `merge` → `merge`, `wait` → `wait`, `code` → `shell`, langchain/AI nodes → `claude`, service nodes (Slack, Gmail, GitHub, Notion, Jira, Linear, S3, Postgres…) → `http` with placeholder URLs. Extracts `schedule` and `webhook` triggers. Topologically sorts steps and injects `needs` dependencies.
 - Auto-improvement proposals — Imported workflows automatically get pending mutation proposals for service nodes (upgrade to `type:mcp`), inline code stubs (port to script), placeholder URLs, and auto-generated branch conditions. Reviewable with `--list-mutations`.

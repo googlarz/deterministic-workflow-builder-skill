@@ -52,6 +52,8 @@ VALID_STEP_TYPES = {
     "merge",
     "workflow",
     "skill",
+    "browser",
+    "computer-use",
 }
 VALID_FAILURE_POLICIES = {"stop", "continue"}
 VALID_SIDECAR_KINDS = {"prompt", "skill"}
@@ -666,6 +668,13 @@ def validate_manifest(
                     _add_issue(
                         issues, "error", manifest_path,
                         f"Step `{step_id}` field `instruction` must be a string.",
+                    )
+
+            if step_type in ("browser", "computer-use"):
+                if not isinstance(step.get("instruction"), str) or not step.get("instruction"):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `{step_type}` must define non-empty `instruction`.",
                     )
 
             produces = step.get("produces", [])

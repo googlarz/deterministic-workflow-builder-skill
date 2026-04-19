@@ -1960,6 +1960,88 @@ def run_skill_step(
     return result.returncode, f"skill:{skill_name}"
 
 
+def _run_claude_with_tools(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+    allowed_tools: str,
+    log_prefix: str,
+) -> tuple[int, str]:
+    """Shared runner for browser and computer-use steps: call claude CLI with restricted tools."""
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        atomic_write_text(log_path, f"[{log_prefix}] claude CLI not found — required for {log_prefix} steps\n")
+        return 1, "missing-dependency"
+
+    try:
+        instruction = expand_claude_template(step.get("instruction", ""), paths)
+    except ValueError as exc:
+        atomic_write_text(log_path, f"[{log_prefix}] template expansion error: {exc}\n")
+        return 1, "template-error"
+
+    if not instruction:
+        atomic_write_text(log_path, f"[{log_prefix}] 'instruction' field is required\n")
+        return 1, "config-error"
+
+    timeout_seconds = int(step.get("timeout_seconds", 300))
+    model = step.get("model", "claude-sonnet-4-6")
+
+    try:
+        result = subprocess.run(
+            [claude_bin, "-p", instruction, "--allowedTools", allowed_tools, "--model", model],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=paths.workflow_dir,
+        )
+    except subprocess.TimeoutExpired:
+        atomic_write_text(log_path, f"[{log_prefix}] timed out after {timeout_seconds}s\n")
+        return 1, "timeout"
+
+    response = result.stdout or ""
+    artifact_id = step.get("output_artifact", step["id"])
+    artifact_path = paths.workflow_dir / "artifacts" / f"{artifact_id}.out"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(artifact_path, response + "\n")
+
+    atomic_write_text(
+        log_path,
+        f"[{log_prefix}] exit={result.returncode}\n{response[:500]}\n",
+    )
+
+    if result.returncode != 0:
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(result.stderr[:500] + "\n")
+
+    return result.returncode, log_prefix
+
+
+def run_browser_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Execute a browser automation step via Claude + Chrome MCP integration."""
+    return _run_claude_with_tools(
+        step, paths, log_path,
+        allowed_tools="mcp__Claude_in_Chrome__navigate,mcp__Claude_in_Chrome__read_page,mcp__Claude_in_Chrome__get_page_text,mcp__Claude_in_Chrome__find,mcp__Claude_in_Chrome__form_input,mcp__Claude_in_Chrome__javascript_tool,mcp__Claude_in_Chrome__read_network_requests,mcp__Claude_in_Chrome__read_console_messages,mcp__Claude_in_Chrome__tabs_create_mcp,mcp__Claude_in_Chrome__tabs_close_mcp",
+        log_prefix="browser",
+    )
+
+
+def run_computer_use_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Execute a desktop automation step via Claude + computer-use MCP."""
+    return _run_claude_with_tools(
+        step, paths, log_path,
+        allowed_tools="mcp__computer-use__screenshot,mcp__computer-use__left_click,mcp__computer-use__type,mcp__computer-use__key,mcp__computer-use__scroll,mcp__computer-use__mouse_move,mcp__computer-use__double_click,mcp__computer-use__right_click,mcp__computer-use__open_application,mcp__computer-use__computer_batch",
+        log_prefix="computer-use",
+    )
+
+
 def run_command_step(
     step: dict[str, Any],
     paths: WorkflowPaths,
@@ -1983,6 +2065,10 @@ def run_command_step(
         return run_workflow_step(step, paths, log_path)
     if step["type"] == "skill":
         return run_skill_step(step, paths, log_path)
+    if step["type"] == "browser":
+        return run_browser_step(step, paths, log_path)
+    if step["type"] == "computer-use":
+        return run_computer_use_step(step, paths, log_path)
     working_directory = step.get("working_directory", manifest.get("working_directory", "."))
     cwd = resolve_safe_path(paths.workflow_dir, working_directory)
     env = build_step_env(policy)
