@@ -589,6 +589,7 @@ def _write_workflow_viz(paths: WorkflowPaths) -> None:
     try:
         sys.path.insert(0, str(Path(__file__).parent))
         from visualize_workflow import generate_html  # type: ignore[import]
+
         html = generate_html(paths.workflow_dir)
         (paths.workflow_dir / "workflow-graph.html").write_text(html, encoding="utf-8")
     except Exception:
@@ -1688,7 +1689,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "--repair", action="store_true", help="Repair interrupted state so the workflow can resume."
     )
     parser.add_argument(
-        "--visualize", action="store_true", help="Generate workflow-graph.html visualization and exit."
+        "--visualize",
+        action="store_true",
+        help="Generate workflow-graph.html visualization and exit.",
     )
     return parser.parse_args(argv)
 

@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """Generate an n8n-style HTML visualization of a deterministic workflow."""
+
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
@@ -21,10 +21,7 @@ SIDECAR_GAP = 44
 
 def compute_depths(steps: list[dict]) -> dict[str, int]:
     id_set = {s["id"] for s in steps}
-    dep_map = {
-        s["id"]: [d for d in (s.get("depends_on") or []) if d in id_set]
-        for s in steps
-    }
+    dep_map = {s["id"]: [d for d in (s.get("depends_on") or []) if d in id_set] for s in steps}
     memo: dict[str, int] = {}
 
     def depth(sid: str, stack: frozenset[str] = frozenset()) -> int:
@@ -1026,7 +1023,9 @@ fitToScreen();
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(description="Generate n8n-style HTML workflow visualization.")
-    parser.add_argument("--workflow-dir", default=".", help="Workflow directory containing workflow.json.")
+    parser.add_argument(
+        "--workflow-dir", default=".", help="Workflow directory containing workflow.json."
+    )
     parser.add_argument("--output", default=None, help="Output HTML path.")
     parser.add_argument("--open", action="store_true", help="Open browser after generating.")
     args = parser.parse_args(argv)
