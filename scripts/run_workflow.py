@@ -129,6 +129,7 @@ class WorkflowPaths:
     run_counter_path: Path
     log_dir: Path
     audit_root: Path
+    mutations_path: Path
 
 
 @dataclass
@@ -169,6 +170,7 @@ def build_paths(workflow_dir: Path) -> WorkflowPaths:
         run_counter_path=state_dir / "run-counter.txt",
         log_dir=workflow_dir / "logs",
         audit_root=workflow_dir / "audit" / "runs",
+        mutations_path=state_dir / "proposed-mutations.json",
     )
 
 
@@ -737,6 +739,273 @@ def record_sidecars(paths: WorkflowPaths, manifest: dict[str, Any], consumer_ste
             )
 
 
+def scan_mutation_proposals(
+    output: str, sidecar_id: str, run_context: RunContext
+) -> list[dict[str, Any]]:
+    """Parse ---PROPOSE_MUTATION--- blocks from sidecar output, validate and return list."""
+    import uuid
+
+    VALID_MUTATION_TYPES = {"add_step", "modify_step", "add_sidecar"}
+    ALLOWED_MODIFY_KEYS = {"retry_limit", "timeout_seconds", "failure_policy", "script"}
+    proposals: list[dict[str, Any]] = []
+    blocks = re.findall(r"---PROPOSE_MUTATION---\s*(.*?)\s*---END_MUTATION---", output, re.DOTALL)
+    for block in blocks:
+        try:
+            data = json.loads(block)
+        except json.JSONDecodeError as exc:
+            print(f"[runner] Sidecar {sidecar_id}: invalid mutation JSON: {exc}", file=sys.stderr)
+            continue
+        if not isinstance(data, dict):
+            print(
+                f"[runner] Sidecar {sidecar_id}: mutation must be a JSON object.", file=sys.stderr
+            )
+            continue
+        if data.get("version") != 1:
+            print(f"[runner] Sidecar {sidecar_id}: mutation version must be 1.", file=sys.stderr)
+            continue
+        for required in ("description", "type", "payload"):
+            if required not in data:
+                print(
+                    f"[runner] Sidecar {sidecar_id}: mutation missing field '{required}'.",
+                    file=sys.stderr,
+                )
+                break
+        else:
+            mutation_type = data.get("type")
+            if mutation_type not in VALID_MUTATION_TYPES:
+                print(
+                    f"[runner] Sidecar {sidecar_id}: unknown mutation type '{mutation_type}'.",
+                    file=sys.stderr,
+                )
+                continue
+            payload = data.get("payload", {})
+            if not isinstance(payload, dict):
+                print(
+                    f"[runner] Sidecar {sidecar_id}: mutation payload must be a dict.",
+                    file=sys.stderr,
+                )
+                continue
+            if mutation_type == "add_step" and "step" not in payload:
+                print(
+                    f"[runner] Sidecar {sidecar_id}: add_step payload must have 'step'.",
+                    file=sys.stderr,
+                )
+                continue
+            if mutation_type == "modify_step":
+                if "step_id" not in payload or "changes" not in payload:
+                    print(
+                        f"[runner] Sidecar {sidecar_id}: modify_step payload needs 'step_id' and 'changes'.",
+                        file=sys.stderr,
+                    )
+                    continue
+                bad_keys = set(payload.get("changes", {}).keys()) - ALLOWED_MODIFY_KEYS
+                if bad_keys:
+                    print(
+                        f"[runner] Sidecar {sidecar_id}: modify_step disallowed keys: {bad_keys}.",
+                        file=sys.stderr,
+                    )
+                    continue
+            if mutation_type == "add_sidecar" and "sidecar" not in payload:
+                print(
+                    f"[runner] Sidecar {sidecar_id}: add_sidecar payload must have 'sidecar'.",
+                    file=sys.stderr,
+                )
+                continue
+            mut_id = f"mut-{uuid.uuid4().hex[:8]}"
+            proposals.append(
+                {
+                    "id": mut_id,
+                    "proposed_by": sidecar_id,
+                    "proposed_at": utc_now(),
+                    "run_id": run_context.run_id or "",
+                    "description": str(data["description"]),
+                    "type": mutation_type,
+                    "payload": payload,
+                    "status": "pending",
+                }
+            )
+    return proposals
+
+
+def store_mutation_proposals(paths: WorkflowPaths, proposals: list[dict[str, Any]]) -> None:
+    """Append new proposals to proposed-mutations.json atomically."""
+    with STATE_IO_LOCK:
+        existing = read_json_file(paths.mutations_path, {"mutations": []})
+        existing.setdefault("mutations", [])
+        existing["mutations"].extend(proposals)
+        atomic_write_json(paths.mutations_path, existing)
+
+
+def run_sidecar_script(
+    sc: dict[str, Any],
+    paths: WorkflowPaths,
+    manifest: dict[str, Any],
+    run_context: RunContext,
+) -> str | None:
+    """Execute a sidecar script if present, capture output, scan for mutation proposals."""
+    if "script" not in sc:
+        return None
+    script_path_raw = sc["script"]
+    try:
+        script_path = resolve_safe_path(paths.workflow_dir, script_path_raw)
+    except ValueError as exc:
+        print(f"[runner] Sidecar script path error: {exc}", file=sys.stderr)
+        return None
+    log_path = paths.log_dir / f"sidecar-{sc['id']}.log"
+    try:
+        result = subprocess.run(
+            ["bash", str(script_path)],
+            cwd=paths.workflow_dir,
+            text=True,
+            capture_output=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
+        output = result.stdout or ""
+    except Exception as exc:
+        output = f"[runner] Sidecar script error: {exc}\n"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(log_path, output)
+    proposals = scan_mutation_proposals(output, sc["id"], run_context)
+    if proposals:
+        store_mutation_proposals(paths, proposals)
+    return output
+
+
+def apply_mutation(manifest_path: Path, mutation: dict[str, Any]) -> dict[str, Any]:
+    """Apply a mutation to workflow.json, backing up first. Returns updated manifest."""
+    import time as _time
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    ts = str(int(_time.time()))
+    backup_path = manifest_path.parent / f"workflow.json.bak-{ts}"
+    backup_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+    mutation_type = mutation["type"]
+    payload = mutation["payload"]
+
+    if mutation_type == "add_step":
+        new_step = payload["step"]
+        new_step.setdefault("name", new_step.get("id", "unnamed-step"))
+        new_step.setdefault("type", "shell")
+        new_step.setdefault("success_gate", "")
+        new_step.setdefault("gate_type", "artifact")
+        new_step.setdefault("requires_approval", False)
+        new_step.setdefault("retry_limit", 0)
+        new_step.setdefault("timeout_seconds", 300)
+        after_id = payload.get("after")
+        before_id = payload.get("before")
+        steps = manifest["steps"]
+        if after_id:
+            idx = next((i for i, s in enumerate(steps) if s["id"] == after_id), None)
+            insert_at = (idx + 1) if idx is not None else len(steps)
+        elif before_id:
+            idx = next((i for i, s in enumerate(steps) if s["id"] == before_id), None)
+            insert_at = idx if idx is not None else len(steps)
+            # Update depends_on of the before step to include new_step
+            if idx is not None:
+                existing_deps = steps[idx].get("depends_on", [])
+                new_step_id = new_step.get("id", "")
+                if new_step_id and new_step_id not in existing_deps:
+                    new_step_deps = new_step.get("depends_on", [])
+                    for dep in new_step_deps:
+                        if dep in existing_deps:
+                            existing_deps.remove(dep)
+                    existing_deps.insert(0, new_step_id)
+                    steps[idx]["depends_on"] = existing_deps
+        else:
+            insert_at = len(steps)
+        steps.insert(insert_at, new_step)
+
+    elif mutation_type == "modify_step":
+        step_id = payload["step_id"]
+        changes = payload["changes"]
+        ALLOWED = {"retry_limit", "timeout_seconds", "failure_policy", "script"}
+        step = next((s for s in manifest["steps"] if s["id"] == step_id), None)
+        if step is None:
+            backup_path.unlink(missing_ok=True)
+            raise ValueError(f"modify_step: step '{step_id}' not found")
+        for key, value in changes.items():
+            if key in ALLOWED:
+                step[key] = value
+
+    elif mutation_type == "add_sidecar":
+        manifest.setdefault("sidecars", []).append(payload["sidecar"])
+
+    from workflow_schema import validate_manifest
+
+    issues = validate_manifest(manifest, manifest_path)
+    errors = [i for i in issues if i.severity == "error"]
+    if errors:
+        backup_path.replace(manifest_path)
+        raise ValueError(f"Mutation validation failed: {errors[0].message}")
+
+    atomic_write_json(manifest_path, manifest)
+    return manifest
+
+
+def list_mutations(paths: WorkflowPaths) -> int:
+    """List pending mutation proposals."""
+    data = read_json_file(paths.mutations_path, {"mutations": []})
+    mutations = data.get("mutations", [])
+    if not mutations:
+        print("No mutation proposals.")
+        return 0
+    rows = [
+        [m["id"], m["proposed_by"], m["type"], m["description"][:50], m["status"]]
+        for m in mutations
+    ]
+    print_table(["id", "proposed_by", "type", "description", "status"], rows)
+    return 0
+
+
+def approve_mutation(paths: WorkflowPaths, mut_id: str) -> int:
+    """Apply a pending mutation and mark it applied."""
+    with STATE_IO_LOCK:
+        data = read_json_file(paths.mutations_path, {"mutations": []})
+        mutations = data.get("mutations", [])
+        mutation = next((m for m in mutations if m["id"] == mut_id), None)
+        if mutation is None:
+            print(f"Unknown mutation: {mut_id}", file=sys.stderr)
+            return 1
+        if mutation["status"] != "pending":
+            print(
+                f"Mutation {mut_id} is not pending (status={mutation['status']}).", file=sys.stderr
+            )
+            return 1
+        try:
+            apply_mutation(paths.manifest_path, mutation)
+        except ValueError as exc:
+            print(f"Failed to apply mutation: {exc}", file=sys.stderr)
+            return 1
+        mutation["status"] = "applied"
+        atomic_write_json(paths.mutations_path, data)
+    _write_workflow_viz(paths)
+    print(f"Applied mutation {mut_id}: {mutation['description']}")
+    return 0
+
+
+def reject_mutation(paths: WorkflowPaths, mut_id: str) -> int:
+    """Mark a mutation as rejected."""
+    with STATE_IO_LOCK:
+        data = read_json_file(paths.mutations_path, {"mutations": []})
+        mutations = data.get("mutations", [])
+        mutation = next((m for m in mutations if m["id"] == mut_id), None)
+        if mutation is None:
+            print(f"Unknown mutation: {mut_id}", file=sys.stderr)
+            return 1
+        if mutation["status"] != "pending":
+            print(
+                f"Mutation {mut_id} is not pending (status={mutation['status']}).", file=sys.stderr
+            )
+            return 1
+        mutation["status"] = "rejected"
+        atomic_write_json(paths.mutations_path, data)
+    print(f"Rejected mutation {mut_id}")
+    return 0
+
+
 def enforce_path_contract(
     paths: WorkflowPaths, contract: dict[str, Any], *, allow_missing: bool = False
 ) -> tuple[bool, str]:
@@ -914,6 +1183,8 @@ def enforce_security_policy(
             allowed in (resolved_workdir, *resolved_workdir.parents) for allowed in allowed_paths
         ):
             return False, f"Working directory not allowed by policy: {working_directory}"
+    if step["type"] == "mcp":
+        return True, "ok"
     if step["type"] in {"shell", "test", "transform", "publish", "sidecar-consume", "approval"}:
         script_path = resolve_safe_path(paths.workflow_dir, step["script"])
         commands = detect_used_commands(script_path)
@@ -955,6 +1226,131 @@ def build_step_env(policy: dict[str, Any]) -> dict[str, str]:
     return result
 
 
+def load_mcp_registry(manifest: dict[str, Any], workflow_dir: Path) -> dict[str, Any]:
+    """Return {server_name: server_config}. First match wins: manifest key, workflow .mcp.json, cwd .mcp.json."""
+    if "mcp_servers" in manifest:
+        return manifest["mcp_servers"].get("mcpServers", manifest["mcp_servers"])
+    for candidate in (workflow_dir / ".mcp.json", Path.cwd() / ".mcp.json"):
+        if candidate.exists():
+            try:
+                data = json.loads(candidate.read_text(encoding="utf-8"))
+                return data.get("mcpServers", {})
+            except (json.JSONDecodeError, OSError):
+                pass
+    return {}
+
+
+def expand_mcp_params(params: Any, workflow_dir: Path) -> Any:
+    """Recursively expand {{...}} template patterns in string values."""
+    if isinstance(params, dict):
+        return {k: expand_mcp_params(v, workflow_dir) for k, v in params.items()}
+    if isinstance(params, list):
+        return [expand_mcp_params(item, workflow_dir) for item in params]
+    if not isinstance(params, str):
+        return params
+
+    def _replace(match: re.Match) -> str:  # type: ignore[type-arg]
+        expr = match.group(1)
+        if expr.startswith("env:"):
+            return os.environ.get(expr[4:], "")
+        if ":" in expr:
+            file_part, _, key_part = expr.partition(":")
+            file_path = workflow_dir / file_part
+            if not file_path.exists():
+                raise ValueError(f"MCP param template: artifact not found: {file_part}")
+            data = json.loads(file_path.read_text(encoding="utf-8"))
+            for part in key_part.split("."):
+                if not isinstance(data, dict) or part not in data:
+                    raise ValueError(
+                        f"MCP param template: key '{key_part}' not found in {file_part}"
+                    )
+                data = data[part]
+            return str(data)
+        # Raw file content
+        file_path = workflow_dir / expr
+        if not file_path.exists():
+            raise ValueError(f"MCP param template: artifact not found: {expr}")
+        return file_path.read_text(encoding="utf-8").strip()
+
+    return re.sub(r"\{\{([^}]+)\}\}", _replace, params)
+
+
+def run_mcp_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    manifest: dict[str, Any],
+    policy: dict[str, Any],
+    log_path: Path,
+) -> tuple[int, str]:
+    executor_config = step.get("executor_config", {})
+    server_name = executor_config.get("server", "")
+    tool_name = executor_config.get("tool", "")
+    params = executor_config.get("params", {})
+    output_artifact = executor_config.get("output_artifact")
+
+    registry = load_mcp_registry(manifest, paths.workflow_dir)
+    if server_name not in registry:
+        msg = f"[runner] MCP server '{server_name}' not found in registry.\n"
+        atomic_write_text(log_path, msg)
+        return 1, "mcp-error"
+
+    try:
+        import importlib
+
+        importlib.import_module("mcp")
+    except ImportError:
+        msg = "[runner] mcp step requires: pip install 'mcp>=1.0'\n"
+        atomic_write_text(log_path, msg)
+        return 1, "missing-dependency"
+
+    try:
+        expanded_params = expand_mcp_params(params, paths.workflow_dir)
+    except ValueError as exc:
+        atomic_write_text(log_path, f"[runner] MCP param expansion error: {exc}\n")
+        return 1, "mcp-error"
+
+    server_config = registry[server_name]
+
+    try:
+        import asyncio  # noqa: PLC0415
+
+        from mcp import ClientSession  # type: ignore[import]  # noqa: PLC0415, I001
+        from mcp.client.sse import sse_client  # type: ignore[import]  # noqa: PLC0415
+        from mcp.client.stdio import (  # type: ignore[import]  # noqa: PLC0415
+            StdioServerParameters,
+            stdio_client,
+        )
+
+        async def _call_tool() -> Any:
+            if "url" in server_config:
+                async with sse_client(server_config["url"]) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        return await session.call_tool(tool_name, expanded_params)
+            else:
+                cmd = server_config.get("command", "")
+                args = server_config.get("args", [])
+                env_override = server_config.get("env", {})
+                merged_env = {**os.environ, **env_override}
+                server_params = StdioServerParameters(command=cmd, args=args, env=merged_env)
+                async with stdio_client(server_params) as (read, write):
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        return await session.call_tool(tool_name, expanded_params)
+
+        result = asyncio.run(_call_tool())
+        result_json = json.dumps({"result": str(result)}, indent=2)
+        atomic_write_text(log_path, f"[runner] MCP tool '{tool_name}' succeeded.\n{result_json}\n")
+        if output_artifact:
+            artifact_path = paths.workflow_dir / output_artifact
+            artifact_path.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(artifact_path, result_json + "\n")
+        return 0, "mcp"
+    except Exception as exc:
+        atomic_write_text(log_path, f"[runner] MCP tool call failed: {exc}\n")
+        return 1, "mcp-error"
+
+
 def run_command_step(
     step: dict[str, Any],
     paths: WorkflowPaths,
@@ -962,6 +1358,8 @@ def run_command_step(
     policy: dict[str, Any],
     log_path: Path,
 ) -> tuple[int, str]:
+    if step["type"] == "mcp":
+        return run_mcp_step(step, paths, manifest, policy, log_path)
     working_directory = step.get("working_directory", manifest.get("working_directory", "."))
     cwd = resolve_safe_path(paths.workflow_dir, working_directory)
     env = build_step_env(policy)
@@ -1183,6 +1581,10 @@ def execute_single_step(
 
     mark_step_status(paths, step_id, "running")
     record_sidecars(paths, manifest, step_id)
+    # Run "before" sidecar scripts
+    for sidecar in manifest.get("sidecars", []):
+        if sidecar.get("consumer_step") == step_id and sidecar.get("when") == "before":
+            run_sidecar_script(sidecar, paths, manifest, run_context)
     base_attempt = int(step.get("_attempt", 0))
     last_result = StepResult(
         step_id=step_id, returncode=1, category="failed", message="failed", duration_seconds=0.0
@@ -1224,6 +1626,10 @@ def execute_single_step(
                     handle.write("\n".join(errors) + "\n")
 
         if returncode == 0:
+            # Run "after" sidecar scripts
+            for sidecar in manifest.get("sidecars", []):
+                if sidecar.get("consumer_step") == step_id and sidecar.get("when") == "after":
+                    run_sidecar_script(sidecar, paths, manifest, run_context)
             mark_step_status(paths, step_id, "complete")
             if should_require_approval(step, policy):
                 attach_approval_to_run(paths, run_context, step_id)
@@ -1723,6 +2129,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Generate workflow-graph.html visualization and exit.",
     )
+    parser.add_argument(
+        "--list-mutations", action="store_true", help="List pending mutation proposals."
+    )
+    parser.add_argument("--approve-mutation", default=None, help="Apply a pending mutation by id.")
+    parser.add_argument("--reject-mutation", default=None, help="Reject a pending mutation by id.")
     return parser.parse_args(argv)
 
 
@@ -1774,6 +2185,12 @@ def main(argv: list[str]) -> int:
             )
         if args.rollback is not None:
             return rollback_step(manifest, paths, policy, args.rollback)
+        if args.list_mutations:
+            return list_mutations(paths)
+        if args.approve_mutation is not None:
+            return approve_mutation(paths, args.approve_mutation)
+        if args.reject_mutation is not None:
+            return reject_mutation(paths, args.reject_mutation)
         if args.step is not None:
             step = get_steps_by_id(manifest).get(args.step)
             if step is None:

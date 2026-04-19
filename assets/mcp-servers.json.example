@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "_comment": "Copy to .mcp.json in your workflow directory and fill in credentials.",
+    "slack": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-slack"],
+      "env": {"SLACK_BOT_TOKEN": "xoxb-YOUR-TOKEN"}
+    }
+  }
+}

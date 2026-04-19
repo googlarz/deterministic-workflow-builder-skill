@@ -992,5 +992,318 @@ class DeterministicWorkflowTests(unittest.TestCase):
             self.assertIn("01-collect", listed.stdout)
 
 
+class McpStepTests(unittest.TestCase):
+    RUN_SCRIPT = SKILL_DIR / "scripts" / "run_workflow.py"
+
+    def test_mcp_step_fails_gracefully_without_library(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_command(
+                "python3",
+                str(INIT_SCRIPT),
+                "mcp-flow",
+                "--path",
+                str(root),
+                "--steps",
+                "notify",
+            )
+            workflow_dir = root / "mcp-flow"
+            manifest_path = workflow_dir / "workflow.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["residual_nondeterminism"] = ["none"]
+            manifest["steps"][0]["type"] = "mcp"
+            manifest["steps"][0]["script"] = ""
+            manifest["steps"][0]["success_gate"] = "todo"
+            manifest["steps"][0]["executor_config"] = {
+                "server": "fake",
+                "tool": "foo",
+                "params": {},
+            }
+            # Add registry so the server is found (ImportError should then trigger)
+            manifest["mcp_servers"] = {
+                "mcpServers": {"fake": {"command": "npx", "args": ["-y", "fake-mcp"]}}
+            }
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+            # Patch mcp import via wrapper script
+            wrapper = root / "run_mcp_test.py"
+            step_id = manifest["steps"][0]["id"]
+            wrapper.write_text(
+                "import sys, builtins\n"
+                "real_import = builtins.__import__\n"
+                "def patched_import(name, *args, **kwargs):\n"
+                "    if name == 'mcp' or name.startswith('mcp.'):\n"
+                "        raise ImportError('mocked mcp missing')\n"
+                "    return real_import(name, *args, **kwargs)\n"
+                "builtins.__import__ = patched_import\n"
+                f"sys.argv = ['run_workflow.py', '--workflow-dir', {str(workflow_dir)!r},"
+                f" '--step', {step_id!r}]\n"
+                f"sys.path.insert(0, {str(self.RUN_SCRIPT.parent)!r})\n"
+                "import run_workflow\n"
+                "sys.exit(run_workflow.main(sys.argv[1:]))\n",
+                encoding="utf-8",
+            )
+            result = run_command("python3", str(wrapper))
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            log_path = workflow_dir / "logs" / f"{step_id}.log"
+            self.assertTrue(log_path.exists(), f"log file missing: {result.stderr}")
+            log_text = log_path.read_text(encoding="utf-8")
+            self.assertIn("pip install", log_text)
+
+    def test_mcp_param_template_expansion(self) -> None:
+        import sys
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            (tmp_path / "artifacts").mkdir()
+            (tmp_path / "artifacts" / "result.json").write_text(
+                json.dumps({"version": "1.2.3"}), encoding="utf-8"
+            )
+            # Import expand_mcp_params directly — ensure scripts dir is on path
+            scripts_dir = str(self.RUN_SCRIPT.parent)
+            if scripts_dir not in sys.path:
+                sys.path.insert(0, scripts_dir)
+            import run_workflow as rw  # noqa: PLC0415
+
+            result = rw.expand_mcp_params({"text": "v={{artifacts/result.json:version}}"}, tmp_path)
+            self.assertEqual(result, {"text": "v=1.2.3"})
+
+
+class SidecarMutationTests(unittest.TestCase):
+    RUN_SCRIPT = SKILL_DIR / "scripts" / "run_workflow.py"
+
+    def _base_manifest(self, name: str, steps: list, sidecars: list | None = None) -> dict:
+        return {
+            "schema_version": 4,
+            "workflow_name": name,
+            "version": 1,
+            "goal": f"test {name}",
+            "policy_pack": "strict-prod",
+            "policy": {},
+            "working_directory": ".",
+            "inputs": [],
+            "outputs": [],
+            "graph": {"execution_model": "dag"},
+            "environment": {"network_mode": "inherit"},
+            "tooling": {
+                "allowlisted_commands": [
+                    "bash",
+                    "cat",
+                    "cp",
+                    "echo",
+                    "find",
+                    "git",
+                    "grep",
+                    "jq",
+                    "mkdir",
+                    "mv",
+                    "python3",
+                    "rm",
+                    "sed",
+                    "sleep",
+                    "sort",
+                    "touch",
+                    "xargs",
+                ]
+            },
+            "migrations": {"current_from": None},
+            "failure_policy": {"on_error": "stop", "max_retries": 0},
+            "audit": {"enabled": True, "directory": "audit/runs"},
+            "residual_nondeterminism": ["none"],
+            "steps": steps,
+            "sidecars": sidecars or [],
+        }
+
+    def _scaffold(self, tmp_dir: Path, name: str) -> Path:
+        """Create a valid workflow via init script."""
+        run_command("python3", str(INIT_SCRIPT), name, "--path", str(tmp_dir), "--steps", "run")
+        return tmp_dir / name
+
+    def test_sidecar_mutation_proposal_stored(self) -> None:
+        mutation_json = json.dumps(
+            {
+                "version": 1,
+                "description": "Add a verification step",
+                "type": "add_step",
+                "payload": {
+                    "step": {
+                        "id": "02-verify",
+                        "name": "verify",
+                        "type": "shell",
+                        "script": "steps/02-verify.sh",
+                        "depends_on": ["01-run"],
+                        "success_gate": "todo",
+                        "requires_approval": False,
+                        "retry_limit": 0,
+                        "timeout_seconds": 1800,
+                        "gate_type": "artifact",
+                    }
+                },
+            }
+        )
+        sidecar_content = (
+            "#!/usr/bin/env bash\n"
+            "echo ---PROPOSE_MUTATION---\n"
+            f"echo '{mutation_json}'\n"
+            "echo ---END_MUTATION---\n"
+        )
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow_dir = self._scaffold(Path(tmp), "mut-wf")
+            manifest_path = workflow_dir / "workflow.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["residual_nondeterminism"] = ["none"]
+            manifest["steps"][0]["success_gate"] = {
+                "type": "file_exists",
+                "path": "artifacts/01-run.done",
+            }
+            # Replace the TODO step script with one that passes
+            (workflow_dir / "steps" / "01-run.sh").write_text(
+                "#!/usr/bin/env bash\nset -euo pipefail\nmkdir -p artifacts\ntouch artifacts/01-run.done\n",
+                encoding="utf-8",
+            )
+            (workflow_dir / "steps" / "01-run.sh").chmod(0o755)
+            sidecar_script = workflow_dir / "steps" / "sidecar.sh"
+            sidecar_script.write_text(sidecar_content, encoding="utf-8")
+            sidecar_script.chmod(0o755)
+            manifest["sidecars"] = [
+                {
+                    "id": "sc-propose",
+                    "name": "propose mutation",
+                    "purpose": "test",
+                    "when": "after",
+                    "kind": "skill",
+                    "script": "steps/sidecar.sh",
+                    "skill_path": "assets/skills/test-skill",
+                    "containment": {
+                        "mode": "advisory-only",
+                        "enforced_by": "test",
+                        "notes": "test sidecar",
+                    },
+                    "output_schema": {"type": "object"},
+                    "validator": "json-object",
+                    "consumer_step": "01-run",
+                }
+            ]
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+            result = run_command(
+                "python3",
+                str(self.RUN_SCRIPT),
+                "--workflow-dir",
+                str(workflow_dir),
+                "--step",
+                "01-run",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            mutations_path = workflow_dir / "state" / "proposed-mutations.json"
+            self.assertTrue(mutations_path.exists(), "proposed-mutations.json missing")
+            data = json.loads(mutations_path.read_text(encoding="utf-8"))
+            self.assertTrue(len(data["mutations"]) > 0)
+            self.assertEqual(data["mutations"][0]["status"], "pending")
+            self.assertEqual(data["mutations"][0]["type"], "add_step")
+
+    def test_approve_mutation_applies_add_step(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow_dir = self._scaffold(Path(tmp), "approve-wf")
+            manifest_path = workflow_dir / "workflow.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["residual_nondeterminism"] = ["none"]
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+
+            # Build a valid new_step by cloning the existing scaffolded step
+            new_step = dict(manifest["steps"][0])
+            new_step["id"] = "02-new"
+            new_step["name"] = "new step"
+            new_step["script"] = "steps/02-new.sh"
+            new_step["depends_on"] = [manifest["steps"][0]["id"]]
+
+            mutations_data = {
+                "mutations": [
+                    {
+                        "id": "mut-testaaaa",
+                        "proposed_by": "test-sidecar",
+                        "proposed_at": "2024-01-01T00:00:00Z",
+                        "run_id": "run-0001",
+                        "description": "Add new step",
+                        "type": "add_step",
+                        "payload": {"step": new_step},
+                        "status": "pending",
+                    }
+                ]
+            }
+            (workflow_dir / "state" / "proposed-mutations.json").write_text(
+                json.dumps(mutations_data, indent=2), encoding="utf-8"
+            )
+
+            result = run_command(
+                "python3",
+                str(self.RUN_SCRIPT),
+                "--workflow-dir",
+                str(workflow_dir),
+                "--approve-mutation",
+                "mut-testaaaa",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+            updated = json.loads(manifest_path.read_text(encoding="utf-8"))
+            step_ids = [s["id"] for s in updated["steps"]]
+            self.assertIn("02-new", step_ids)
+
+            mutations = json.loads(
+                (workflow_dir / "state" / "proposed-mutations.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(mutations["mutations"][0]["status"], "applied")
+
+    def test_reject_mutation(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            workflow_dir = self._scaffold(Path(tmp), "reject-wf")
+            manifest_path = workflow_dir / "workflow.json"
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            manifest["residual_nondeterminism"] = ["none"]
+            manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+            original_step_count = len(manifest["steps"])
+
+            mutations_data = {
+                "mutations": [
+                    {
+                        "id": "mut-rejectbb",
+                        "proposed_by": "test-sidecar",
+                        "proposed_at": "2024-01-01T00:00:00Z",
+                        "run_id": "run-0001",
+                        "description": "Some modification",
+                        "type": "modify_step",
+                        "payload": {
+                            "step_id": manifest["steps"][0]["id"],
+                            "changes": {"retry_limit": 3},
+                        },
+                        "status": "pending",
+                    }
+                ]
+            }
+            (workflow_dir / "state" / "proposed-mutations.json").write_text(
+                json.dumps(mutations_data, indent=2), encoding="utf-8"
+            )
+
+            result = run_command(
+                "python3",
+                str(self.RUN_SCRIPT),
+                "--workflow-dir",
+                str(workflow_dir),
+                "--reject-mutation",
+                "mut-rejectbb",
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertIn("Rejected", result.stdout)
+
+            mutations = json.loads(
+                (workflow_dir / "state" / "proposed-mutations.json").read_text(encoding="utf-8")
+            )
+            self.assertEqual(mutations["mutations"][0]["status"], "rejected")
+
+            # workflow.json step count unchanged
+            updated = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(len(updated["steps"]), original_step_count)
+
+
 if __name__ == "__main__":
     unittest.main()

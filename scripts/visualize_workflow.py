@@ -113,6 +113,31 @@ def generate_html(workflow_dir: Path) -> str:
     metrics_steps = read_json(workflow_dir / "state" / "metrics.json", {}).get("steps", {})
     runtime_steps = read_json(workflow_dir / "state" / "runtime-state.json", {}).get("steps", {})
 
+    # Load pending mutations
+    mutations_data = read_json(
+        workflow_dir / "state" / "proposed-mutations.json", {"mutations": []}
+    )
+    pending_mutations = [
+        m for m in mutations_data.get("mutations", []) if m.get("status") == "pending"
+    ]
+
+    # Build a map: step_id -> list of pending mutations that affect it
+    step_pending_mutations: dict[str, list[dict]] = {}
+    for m in pending_mutations:
+        affected: list[str] = []
+        if m["type"] == "add_step":
+            after_id = m["payload"].get("after")
+            before_id = m["payload"].get("before")
+            if after_id:
+                affected.append(after_id)
+            elif before_id:
+                affected.append(before_id)
+        elif m["type"] == "modify_step":
+            affected.append(m["payload"].get("step_id", ""))
+        for sid in affected:
+            if sid:
+                step_pending_mutations.setdefault(sid, []).append(m)
+
     positions, sidecar_positions, canvas_w, canvas_h = compute_layout(steps, sidecars)
 
     def fmt_contract(c: object) -> str:
@@ -127,6 +152,19 @@ def generate_html(workflow_dir: Path) -> str:
         "policy_pack": manifest.get("policy_pack", "strict-prod"),
         "canvas_w": canvas_w,
         "canvas_h": canvas_h,
+        "pending_mutations": [
+            {
+                "id": m["id"],
+                "type": m["type"],
+                "description": m["description"],
+                "affects": (
+                    [m["payload"].get("after") or m["payload"].get("before", "")]
+                    if m["type"] == "add_step"
+                    else ([m["payload"].get("step_id", "")] if m["type"] == "modify_step" else [])
+                ),
+            }
+            for m in pending_mutations
+        ],
         "steps": [
             {
                 "id": s["id"],
@@ -144,6 +182,10 @@ def generate_html(workflow_dir: Path) -> str:
                 "runs": metrics_steps.get(s["id"], {}).get("runs", 0),
                 "failures": metrics_steps.get(s["id"], {}).get("failures", 0),
                 "last_error": runtime_steps.get(s["id"], {}).get("last_error") or "",
+                "pending_mutations": [
+                    {"id": m["id"], "description": m["description"]}
+                    for m in step_pending_mutations.get(s["id"], [])
+                ],
                 "x": positions[s["id"]][0],
                 "y": positions[s["id"]][1],
             }
@@ -356,6 +398,8 @@ body {
 .running-pulse { animation: pulse-dot 1.4s ease-in-out infinite; }
 @keyframes fadeIn { from { opacity:0; } to { opacity:1; } }
 .fade-in { animation: fadeIn 0.15s ease forwards; }
+@keyframes pulse-amber { 0%,100% { opacity:0.8; } 50% { opacity:0.2; } }
+.mutation-ring { animation: pulse-amber 1.8s ease-in-out infinite; }
 
 /* ── Keyboard shortcuts overlay ──────────────────────────── */
 #shortcuts {
@@ -477,6 +521,10 @@ body {
   <div class="insp-section" id="sec-deps" style="display:none">
     <div class="insp-label">Depends On</div>
     <div class="insp-list" id="insp-deps"></div>
+  </div>
+  <div class="insp-section" id="sec-mutations" style="display:none">
+    <div class="insp-label" style="color:#f59e0b">Pending Mutations</div>
+    <div class="insp-list" id="insp-mutations"></div>
   </div>
 </div>
 
@@ -699,6 +747,21 @@ function renderNode(step) {
     g.appendChild(br); g.appendChild(bt);
   }
 
+  // Pending mutation amber ring
+  if (step.pending_mutations && step.pending_mutations.length > 0) {
+    const ring = svgEl('circle', {
+      cx: NW/2, cy: NH/2, r: String(NH/2 + 6),
+      fill: 'none', stroke: '#f59e0b', 'stroke-width': '2', opacity: '0.8',
+      class: 'mutation-ring',
+    });
+    g.appendChild(ring);
+    // Mutation count badge top-left
+    const mbg = svgEl('rect', { x: 2, y: 2, width: 28, height: 16, rx: 8, fill: '#f59e0b22', stroke: '#f59e0b55', 'stroke-width': '1' });
+    const mt = svgEl('text', { x: 16, y: 14, 'text-anchor': 'middle', 'font-size': '9', 'font-weight': '700', fill: '#f59e0b' });
+    mt.textContent = '\u26A1 ' + step.pending_mutations.length;
+    g.appendChild(mbg); g.appendChild(mt);
+  }
+
   // Status dot top-right
   const dot = svgEl('circle', { cx:NW-10, cy:12, r:5, fill:scolor, class:isRun?'running-pulse':'' });
   g.appendChild(dot);
@@ -822,6 +885,21 @@ function showInspector(step) {
   secList('produces', step.produces);
   secList('consumes', step.consumes);
   secList('deps', step.depends_on);
+
+  // Pending mutations section
+  const mutSec = document.getElementById('sec-mutations');
+  const mutList = document.getElementById('insp-mutations');
+  mutList.innerHTML = '';
+  if (step.pending_mutations && step.pending_mutations.length > 0) {
+    mutSec.style.display = '';
+    step.pending_mutations.forEach(m => {
+      const d = document.createElement('div');
+      d.className = 'insp-chip';
+      d.style.cssText = 'border-color:#f59e0b44;color:#f59e0b;';
+      d.textContent = '\u26A1 [' + m.id + '] ' + m.description;
+      mutList.appendChild(d);
+    });
+  } else { mutSec.style.display = 'none'; }
 
   document.getElementById('inspector').classList.add('open');
   document.getElementById('inspector').classList.add('fade-in');

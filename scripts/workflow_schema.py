@@ -42,6 +42,7 @@ VALID_STEP_TYPES = {
     "http-check",
     "git-diff-check",
     "manual-approval",
+    "mcp",
 }
 VALID_FAILURE_POLICIES = {"stop", "continue"}
 VALID_SIDECAR_KINDS = {"prompt", "skill"}
