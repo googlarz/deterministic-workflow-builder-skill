@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.0.3
+- Feature 2 — MCP steps: new `type: "mcp"` step executes a tool call via the MCP protocol using the `.mcp.json` server registry. Params support `{{artifact:id}}` and `{{env:VAR}}` template expansion. Added `assets/mcp-servers.json.example`.
+- Feature 3 — Sidecar mutation proposals: sidecar scripts can emit structured JSON proposals (`add_step` / `modify_step` / `remove_step`) via a `---PROPOSE_MUTATION---` sentinel. Runner captures and stores proposals in `state/proposed-mutations.json`. New CLI flags: `--list-mutations`, `--approve-mutation ID`, `--reject-mutation ID`.
+- `apply_mutation()` fills in required schema defaults so proposals without full step specs can be approved without manual editing.
+- Visualization updated: nodes with pending mutations show an amber pulsing ring; inspector panel lists mutation details.
+- UX fixes: workflow execution now prints per-step progress (`→ running`, `✓ complete`, `✗ failed`); approval gates print a clear pause message with instructions; `run_workflow.py` accepts workflow dir as a positional argument; init scaffold no longer generates `success_gate: TODO`.
+
 ## 1.0.2
 - Added `scripts/visualize_workflow.py`: n8n-style interactive HTML DAG viewer auto-generated after every run.
 - Added `--visualize` flag to `run_workflow.py` to generate the graph without executing steps.
