@@ -45,6 +45,12 @@ VALID_STEP_TYPES = {
     "mcp",
     "claude",
     "branch",
+    "http",
+    "switch",
+    "loop",
+    "wait",
+    "merge",
+    "workflow",
 }
 VALID_FAILURE_POLICIES = {"stop", "continue"}
 VALID_SIDECAR_KINDS = {"prompt", "skill"}
@@ -565,6 +571,89 @@ def validate_manifest(
                                     manifest_path,
                                     f"Step `{step_id}` `{branch_field}` references unknown step `{ref_id}`.",
                                 )
+
+            if step_type == "http":
+                if not isinstance(step.get("url"), str) or not step.get("url"):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `http` must define non-empty `url`.",
+                    )
+                method = step.get("method", "GET")
+                if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` has invalid HTTP `method` `{method}`.",
+                    )
+
+            if step_type == "switch":
+                if not isinstance(step.get("expression"), str):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `switch` must define string `expression`.",
+                    )
+                cases = step.get("cases")
+                if not isinstance(cases, list):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `switch` must define list `cases`.",
+                    )
+                else:
+                    all_step_ids = {s.get("id") for s in manifest.get("steps", [])}
+                    for ci, case in enumerate(cases):
+                        if not isinstance(case, dict):
+                            _add_issue(issues, "error", manifest_path,
+                                       f"Step `{step_id}` case #{ci} must be an object.")
+                            continue
+                        for ref_id in case.get("steps", []):
+                            if ref_id not in all_step_ids:
+                                _add_issue(issues, "error", manifest_path,
+                                           f"Step `{step_id}` case #{ci} references unknown step `{ref_id}`.")
+                    for ref_id in step.get("default", []):
+                        if ref_id not in all_step_ids:
+                            _add_issue(issues, "error", manifest_path,
+                                       f"Step `{step_id}` `default` references unknown step `{ref_id}`.")
+
+            if step_type == "loop":
+                if not isinstance(step.get("items_from"), str) or not step.get("items_from"):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `loop` must define non-empty `items_from`.",
+                    )
+                if not isinstance(step.get("script"), str) or not step.get("script"):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `loop` must define non-empty `script`.",
+                    )
+
+            if step_type == "wait":
+                has_seconds = isinstance(step.get("seconds"), (int, float))
+                has_until = isinstance(step.get("until"), str) and step.get("until")
+                if not has_seconds and not has_until:
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `wait` must define `seconds` (number) or `until` (script path).",
+                    )
+
+            if step_type == "merge":
+                inputs = step.get("inputs")
+                if not isinstance(inputs, list) or not inputs:
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `merge` must define non-empty list `inputs`.",
+                    )
+                mode = step.get("mode", "concat")
+                if mode not in {"concat", "zip", "first"}:
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` has invalid `mode` `{mode}`; must be concat|zip|first.",
+                    )
+
+            if step_type == "workflow":
+                if not isinstance(step.get("workflow_dir"), str) or not step.get("workflow_dir"):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `workflow` must define non-empty `workflow_dir`.",
+                    )
 
             produces = step.get("produces", [])
             consumes = step.get("consumes", [])

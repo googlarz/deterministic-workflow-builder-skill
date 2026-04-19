@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.2.0
+- `type: "http"` — Full HTTP request step: method, URL, headers, body, bearer/basic auth, response stored as JSON artifact. Fails on 4xx/5xx by default (`fail_on_error: false` to override). Template expansion supported in url/headers/body.
+- `type: "switch"` — Multi-way branch: evaluate an expression against named cases, mark non-matching steps as skipped. Equivalent to n8n's Switch node.
+- `type: "loop"` — Iterate a script over every item in a JSON array or newline-separated artifact. Each iteration receives `LOOP_ITEM`, `LOOP_INDEX`, `LOOP_TOTAL` env vars. Results written as JSON array artifact.
+- `type: "wait"` — Pause execution for `seconds` or poll a condition script until it exits 0 (`until` field). Configurable timeout and poll interval.
+- `type: "merge"` — Combine multiple artifact inputs into one: `concat` (arrays → flat list, objects → merged dict), `zip`, or `first`. Closes the merge-path gap vs n8n.
+- `type: "workflow"` — Run another `workflow.json` as a sub-workflow. Pass artifacts in, collect artifacts out. Enables composable workflow libraries.
+- 7 new tests; 49/49 pass. No remaining gaps vs n8n's core action nodes.
+
 ## 1.1.0
 - Feature A — `type: "claude"` step: run a Claude prompt as a workflow step with `{{artifact:id}}` / `{{env:VAR}}` template expansion, optional `output_schema` JSON validation, and automatic artifact capture. Calls claude CLI; falls back to anthropic SDK.
 - Feature B — `--generate "description"`: generate a full `workflow.json` + scaffolded directory from a natural language description using Claude.

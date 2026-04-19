@@ -1599,6 +1599,195 @@ class TriggerTests(unittest.TestCase):
             self.assertIn("9999", content)
 
 
+class NewStepTypeTests(unittest.TestCase):
+    """Tests for http, switch, loop, wait, merge, workflow step types."""
+
+    RUN_SCRIPT = SKILL_DIR / "scripts" / "run_workflow.py"
+
+    def _base_step(self, step_id: str, step_type: str, extra: dict | None = None) -> dict:
+        s = {
+            "id": step_id, "name": step_id, "type": step_type,
+            "success_gate": "", "gate_type": "artifact",
+            "requires_approval": False, "retry_limit": 0,
+            "timeout_seconds": 30, "depends_on": [],
+            "produces": [], "consumes": [], "validation_checks": [],
+        }
+        if extra:
+            s.update(extra)
+        return s
+
+    def _scaffold(self, root: Path, name: str, steps: list[dict]) -> Path:
+        run_command("python3", str(INIT_SCRIPT), name, "--path", str(root), "--steps", "fetch")
+        wf = root / name
+        # Clear contracts on init-generated step
+        mp = wf / "workflow.json"
+        m = json.loads(mp.read_text())
+        for s in m["steps"]:
+            s["produces"] = []; s["consumes"] = []; s["validation_checks"] = []
+        m["steps"].extend(steps)
+        mp.write_text(json.dumps(m, indent=2) + "\n")
+        # Make fetch succeed
+        (wf / "steps" / "01-fetch.sh").write_text("#!/usr/bin/env bash\necho ok\n")
+        (wf / "steps" / "01-fetch.sh").chmod(0o755)
+        return wf
+
+    # ── http ──────────────────────────────────────────────────────────────────
+    def test_http_step_calls_url_and_writes_artifact(self) -> None:
+        import http.server, threading  # noqa: E401, PLC0415
+        responses = []
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200); self.end_headers()
+                self.wfile.write(b'{"ok":true}')
+            def log_message(self, *a): pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        port = srv.server_address[1]
+        t = threading.Thread(target=srv.handle_request)
+        t.start()
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = self._scaffold(Path(tmp), "http-wf", [
+                self._base_step("call-api", "http", {
+                    "url": f"http://127.0.0.1:{port}/",
+                    "method": "GET",
+                    "depends_on": ["01-fetch"],
+                })
+            ])
+            result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
+            t.join(timeout=5)
+            srv.server_close()
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            artifact = wf / "artifacts" / "call-api.json"
+            self.assertTrue(artifact.exists())
+            data = json.loads(artifact.read_text())
+            self.assertEqual(data["status_code"], 200)
+
+    def test_http_step_fails_on_4xx_by_default(self) -> None:
+        import http.server, threading  # noqa: E401, PLC0415
+        class H(http.server.BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(404); self.end_headers()
+            def log_message(self, *a): pass
+        srv = http.server.HTTPServer(("127.0.0.1", 0), H)
+        port = srv.server_address[1]
+        t = threading.Thread(target=srv.handle_request)
+        t.start()
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = self._scaffold(Path(tmp), "http-fail-wf", [
+                self._base_step("call-404", "http", {
+                    "url": f"http://127.0.0.1:{port}/",
+                    "depends_on": ["01-fetch"],
+                })
+            ])
+            result = run_command("python3", str(self.RUN_SCRIPT), str(wf), "--step", "call-404")
+            t.join(timeout=5)
+            srv.server_close()
+            self.assertNotEqual(result.returncode, 0)
+
+    # ── switch ────────────────────────────────────────────────────────────────
+    def test_switch_step_skips_non_matching_cases(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wf = self._scaffold(root, "switch-wf", [
+                self._base_step("decide", "switch", {
+                    "expression": "{{env:DEPLOY_ENV}}",
+                    "cases": [
+                        {"value": "prod",    "steps": ["deploy-prod"]},
+                        {"value": "staging", "steps": ["deploy-staging"]},
+                    ],
+                    "default": ["deploy-staging"],
+                    "depends_on": ["01-fetch"],
+                }),
+                self._base_step("deploy-prod",    "shell", {"script": "steps/deploy-prod.sh",    "depends_on": ["decide"]}),
+                self._base_step("deploy-staging", "shell", {"script": "steps/deploy-staging.sh", "depends_on": ["decide"]}),
+            ])
+            for name in ("deploy-prod", "deploy-staging"):
+                s = wf / "steps" / f"{name}.sh"
+                s.write_text(f"#!/usr/bin/env bash\necho {name}\n"); s.chmod(0o755)
+            env = dict(os.environ); env["DEPLOY_ENV"] = "prod"
+            result = run_command("python3", str(self.RUN_SCRIPT), str(wf), env=env)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            state = (wf / "state" / "step-status.tsv").read_text()
+            self.assertIn("deploy-prod\tcomplete", state)
+            self.assertIn("deploy-staging\tskipped", state)
+
+    # ── loop ──────────────────────────────────────────────────────────────────
+    def test_loop_step_iterates_over_json_array(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            wf = self._scaffold(root, "loop-wf", [
+                self._base_step("process-items", "loop", {
+                    "items_from": "items-list",
+                    "script": "steps/process-item.sh",
+                    "depends_on": ["01-fetch"],
+                })
+            ])
+            (wf / "artifacts").mkdir(exist_ok=True)
+            (wf / "artifacts" / "items-list.json").write_text('["apple","banana","cherry"]')
+            proc_sh = wf / "steps" / "process-item.sh"
+            proc_sh.write_text("#!/usr/bin/env bash\necho \"processing: $LOOP_ITEM\"\n"); proc_sh.chmod(0o755)
+            result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            out = json.loads((wf / "artifacts" / "process-items.json").read_text())
+            self.assertEqual(len(out), 3)
+            self.assertTrue(all(r["returncode"] == 0 for r in out))
+
+    # ── wait ──────────────────────────────────────────────────────────────────
+    def test_wait_step_sleeps_for_duration(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = self._scaffold(Path(tmp), "wait-wf", [
+                self._base_step("pause", "wait", {"seconds": 0.1, "depends_on": ["01-fetch"]})
+            ])
+            result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            state = (wf / "state" / "step-status.tsv").read_text()
+            self.assertIn("pause\tcomplete", state)
+
+    # ── merge ─────────────────────────────────────────────────────────────────
+    def test_merge_step_concatenates_json_arrays(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            wf = self._scaffold(Path(tmp), "merge-wf", [
+                self._base_step("combine", "merge", {
+                    "inputs": ["part-a", "part-b"],
+                    "mode": "concat",
+                    "depends_on": ["01-fetch"],
+                })
+            ])
+            (wf / "artifacts").mkdir(exist_ok=True)
+            (wf / "artifacts" / "part-a.json").write_text('[1, 2]')
+            (wf / "artifacts" / "part-b.json").write_text('[3, 4]')
+            result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            out = json.loads((wf / "artifacts" / "combine.json").read_text())
+            self.assertEqual(sorted(out), [1, 2, 3, 4])
+
+    # ── workflow (sub-workflow) ───────────────────────────────────────────────
+    def test_workflow_step_runs_sub_workflow(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            # Create the sub-workflow
+            run_command("python3", str(INIT_SCRIPT), "sub-wf", "--path", str(root), "--steps", "work")
+            sub_wf = root / "sub-wf"
+            sm = sub_wf / "workflow.json"
+            sm_data = json.loads(sm.read_text())
+            for s in sm_data["steps"]:
+                s["produces"] = []; s["consumes"] = []; s["validation_checks"] = []
+            sm.write_text(json.dumps(sm_data, indent=2) + "\n")
+            (sub_wf / "steps" / "01-work.sh").write_text("#!/usr/bin/env bash\necho sub-done\n")
+            (sub_wf / "steps" / "01-work.sh").chmod(0o755)
+
+            # Parent workflow with a workflow step
+            wf = self._scaffold(root, "parent-wf", [
+                self._base_step("run-sub", "workflow", {
+                    "workflow_dir": str(sub_wf),
+                    "depends_on": ["01-fetch"],
+                })
+            ])
+            result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            state = (wf / "state" / "step-status.tsv").read_text()
+            self.assertIn("run-sub\tcomplete", state)
+
+
 class DashboardTests(unittest.TestCase):
     """Tests for the run history dashboard."""
 

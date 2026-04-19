@@ -1564,6 +1564,317 @@ def run_branch_step(
         return 1, "branch-error", []
 
 
+def _read_artifact(paths: WorkflowPaths, artifact_id: str) -> str | None:
+    """Read the first existing artifact file for the given id (.json, .out, or bare)."""
+    for suffix in (".json", ".out", ""):
+        p = paths.workflow_dir / "artifacts" / f"{artifact_id}{suffix}"
+        if p.exists():
+            return p.read_text(encoding="utf-8")
+    return None
+
+
+def run_http_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Full HTTP request step: method, url, headers, body, auth, response → artifact."""
+    import urllib.error  # noqa: PLC0415
+    import urllib.request  # noqa: PLC0415
+
+    method = step.get("method", "GET").upper()
+    timeout_seconds = int(step.get("timeout_seconds", 30))
+    fail_on_error = step.get("fail_on_error", True)
+
+    try:
+        url = expand_claude_template(step.get("url", ""), paths)
+        raw_headers: dict[str, str] = {
+            k: expand_claude_template(v, paths) for k, v in step.get("headers", {}).items()
+        }
+        raw_body = step.get("body")
+        if isinstance(raw_body, dict):
+            body_bytes: bytes | None = json.dumps(raw_body).encode()
+            raw_headers.setdefault("Content-Type", "application/json")
+        elif isinstance(raw_body, str):
+            body_bytes = expand_claude_template(raw_body, paths).encode()
+        else:
+            body_bytes = None
+    except ValueError as exc:
+        atomic_write_text(log_path, f"[http] template expansion error: {exc}\n")
+        return 1, "template-error"
+
+    auth = step.get("auth", {})
+    if isinstance(auth, dict):
+        auth_type = auth.get("type", "none")
+        if auth_type == "bearer":
+            token = expand_claude_template(auth.get("token", ""), paths)
+            raw_headers["Authorization"] = f"Bearer {token}"
+        elif auth_type == "basic":
+            import base64  # noqa: PLC0415
+            username = expand_claude_template(auth.get("username", ""), paths)
+            password = expand_claude_template(auth.get("password", ""), paths)
+            creds = base64.b64encode(f"{username}:{password}".encode()).decode()
+            raw_headers["Authorization"] = f"Basic {creds}"
+
+    req = urllib.request.Request(url, data=body_bytes, headers=raw_headers, method=method)
+    status_code = 0
+    response_body = ""
+    response_headers: dict[str, str] = {}
+
+    try:
+        with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:  # noqa: S310
+            status_code = resp.status
+            response_body = resp.read().decode(errors="replace")
+            response_headers = dict(resp.headers)
+    except urllib.error.HTTPError as exc:
+        status_code = exc.code
+        response_body = exc.read().decode(errors="replace")
+    except Exception as exc:
+        atomic_write_text(log_path, f"[http] request failed: {exc}\n")
+        return 1, "http-error"
+
+    result = {"status_code": status_code, "headers": response_headers, "body": response_body}
+    artifact_path = paths.workflow_dir / "artifacts" / f"{step['id']}.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(artifact_path, json.dumps(result, indent=2) + "\n")
+    atomic_write_text(
+        log_path,
+        f"[http] {method} {url} → {status_code}\n{response_body[:1000]}\n",
+    )
+
+    if fail_on_error and status_code >= 400:
+        return 1, "http-error"
+    return 0, "http"
+
+
+def run_switch_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str, list[str]]:
+    """Multi-way branch: evaluate expression, skip all non-matching case steps."""
+    try:
+        expression = expand_claude_template(step.get("expression", ""), paths)
+    except ValueError as exc:
+        atomic_write_text(log_path, f"[switch] template expansion error: {exc}\n")
+        return 1, "template-error", []
+
+    cases: list[dict[str, Any]] = step.get("cases", [])
+    default_steps: list[str] = step.get("default", [])
+
+    matched_steps: list[str] | None = None
+    for case in cases:
+        if str(case.get("value", "")) == expression:
+            matched_steps = case.get("steps", [])
+            break
+    if matched_steps is None:
+        matched_steps = default_steps
+
+    all_case_steps: set[str] = set()
+    for case in cases:
+        all_case_steps.update(case.get("steps", []))
+    all_case_steps.update(default_steps)
+    skipped = [s for s in all_case_steps if s not in matched_steps]
+
+    atomic_write_text(
+        log_path,
+        f"[switch] expression={expression!r} → {len(matched_steps)} step(s) active,"
+        f" {len(skipped)} skipped\n",
+    )
+    return 0, f"switch:{expression}", skipped
+
+
+def run_loop_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Iterate over items from an artifact, running a script once per item."""
+    items_from = step.get("items_from", "")
+    script_rel = step.get("script", "")
+    timeout_seconds = int(step.get("timeout_seconds", 300))
+
+    content = _read_artifact(paths, items_from)
+    if content is None:
+        atomic_write_text(log_path, f"[loop] items_from artifact not found: {items_from}\n")
+        return 1, "loop-error"
+
+    content = content.strip()
+    try:
+        items: list[Any] = json.loads(content)
+        if not isinstance(items, list):
+            items = [items]
+    except json.JSONDecodeError:
+        items = [line for line in content.splitlines() if line.strip()]
+
+    script_path = resolve_safe_path(paths.workflow_dir, script_rel)
+    results: list[dict[str, Any]] = []
+    all_ok = True
+
+    with log_path.open("w", encoding="utf-8") as log_handle:
+        log_handle.write(f"[loop] Processing {len(items)} item(s)...\n")
+        for idx, item in enumerate(items):
+            env = {
+                **os.environ,
+                "LOOP_ITEM": str(item),
+                "LOOP_INDEX": str(idx),
+                "LOOP_TOTAL": str(len(items)),
+            }
+            try:
+                proc = subprocess.run(
+                    ["bash", str(script_path)],
+                    cwd=paths.workflow_dir,
+                    env=env,
+                    text=True,
+                    stdout=log_handle,
+                    stderr=subprocess.STDOUT,
+                    check=False,
+                    timeout=timeout_seconds,
+                )
+                results.append({"index": idx, "item": item, "returncode": proc.returncode})
+                if proc.returncode != 0:
+                    all_ok = False
+                    if not step.get("continue_on_error", False):
+                        log_handle.write(f"[loop] item #{idx} failed; stopping.\n")
+                        break
+            except subprocess.TimeoutExpired:
+                all_ok = False
+                results.append({"index": idx, "item": item, "returncode": -1, "error": "timeout"})
+                log_handle.write(f"[loop] item #{idx} timed out.\n")
+                break
+
+    artifact_path = paths.workflow_dir / "artifacts" / f"{step['id']}.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(artifact_path, json.dumps(results, indent=2) + "\n")
+    return 0 if all_ok else 1, "loop"
+
+
+def run_wait_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Pause execution for `seconds` or until a condition script exits 0."""
+    seconds = step.get("seconds")
+    until_script = step.get("until", "")
+    timeout_seconds = int(step.get("timeout_seconds", 3600))
+    poll_interval = int(step.get("poll_seconds", 10))
+
+    if until_script:
+        script_path = resolve_safe_path(paths.workflow_dir, until_script)
+        elapsed = 0
+        while elapsed < timeout_seconds:
+            proc = subprocess.run(
+                ["bash", str(script_path)],
+                capture_output=True,
+                cwd=paths.workflow_dir,
+                check=False,
+            )
+            if proc.returncode == 0:
+                atomic_write_text(log_path, f"[wait] condition met after {elapsed}s\n")
+                return 0, "wait"
+            time.sleep(poll_interval)
+            elapsed += poll_interval
+        atomic_write_text(log_path, f"[wait] timed out after {timeout_seconds}s\n")
+        return 1, "wait-timeout"
+
+    duration = float(seconds) if seconds is not None else 0
+    atomic_write_text(log_path, f"[wait] sleeping {duration}s\n")
+    time.sleep(duration)
+    return 0, "wait"
+
+
+def run_merge_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Merge data from multiple artifact inputs into one output artifact."""
+    inputs: list[str] = step.get("inputs", [])
+    mode = step.get("mode", "concat")
+
+    data: list[Any] = []
+    for artifact_id in inputs:
+        raw = _read_artifact(paths, artifact_id)
+        if raw is not None:
+            try:
+                data.append(json.loads(raw.strip()))
+            except json.JSONDecodeError:
+                data.append(raw.strip())
+
+    if mode == "concat":
+        if all(isinstance(d, list) for d in data):
+            result: Any = [item for sublist in data for item in sublist]
+        elif all(isinstance(d, dict) for d in data):
+            merged: dict[str, Any] = {}
+            for d in data:
+                merged.update(d)
+            result = merged
+        else:
+            result = data
+    elif mode == "zip":
+        lists = [d if isinstance(d, list) else [d] for d in data]
+        result = [list(row) for row in zip(*lists)]
+    elif mode == "first":
+        result = data[0] if data else None
+    else:
+        result = data
+
+    artifact_path = paths.workflow_dir / "artifacts" / f"{step['id']}.json"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(artifact_path, json.dumps(result, indent=2) + "\n")
+    atomic_write_text(log_path, f"[merge] merged {len(inputs)} input(s), mode={mode}\n")
+    return 0, "merge"
+
+
+def run_workflow_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Run another workflow.json as a sub-workflow, optionally passing/collecting artifacts."""
+    sub_dir_raw = step.get("workflow_dir", "")
+    sub_dir = (paths.workflow_dir / sub_dir_raw).resolve()
+    pass_artifacts: list[str] = step.get("pass_artifacts", [])
+    collect_artifacts: list[str] = step.get("collect_artifacts", [])
+    timeout_seconds = int(step.get("timeout_seconds", 7200))
+
+    for artifact_id in pass_artifacts:
+        raw = _read_artifact(paths, artifact_id)
+        if raw is not None:
+            dst = sub_dir / "artifacts" / f"{artifact_id}.out"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(dst, raw)
+
+    runner = Path(__file__).resolve()
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(runner), str(sub_dir)],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except subprocess.TimeoutExpired:
+        atomic_write_text(log_path, f"[workflow] sub-workflow timed out after {timeout_seconds}s\n")
+        return 1, "timeout"
+
+    atomic_write_text(
+        log_path,
+        f"[workflow] sub-workflow {sub_dir.name} exit={proc.returncode}\n"
+        f"{proc.stdout}\n{proc.stderr}\n",
+    )
+
+    sub_paths = build_paths(sub_dir)
+    for artifact_id in collect_artifacts:
+        raw = _read_artifact(sub_paths, artifact_id)
+        if raw is not None:
+            dst = paths.workflow_dir / "artifacts" / f"{artifact_id}.out"
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            atomic_write_text(dst, raw)
+
+    return proc.returncode, "workflow"
+
+
 def run_command_step(
     step: dict[str, Any],
     paths: WorkflowPaths,
@@ -1575,6 +1886,16 @@ def run_command_step(
         return run_mcp_step(step, paths, manifest, policy, log_path)
     if step["type"] == "claude":
         return run_claude_step(step, paths, log_path)
+    if step["type"] == "http":
+        return run_http_step(step, paths, log_path)
+    if step["type"] == "loop":
+        return run_loop_step(step, paths, log_path)
+    if step["type"] == "wait":
+        return run_wait_step(step, paths, log_path)
+    if step["type"] == "merge":
+        return run_merge_step(step, paths, log_path)
+    if step["type"] == "workflow":
+        return run_workflow_step(step, paths, log_path)
     working_directory = step.get("working_directory", manifest.get("working_directory", "."))
     cwd = resolve_safe_path(paths.workflow_dir, working_directory)
     env = build_step_env(policy)
@@ -1833,6 +2154,12 @@ def execute_single_step(
                 for sid in skipped_ids:
                     mark_step_status(paths, sid, "skipped")
                     print(f"  ↷ skipped  {sid}  (branch not taken)", flush=True)
+        elif step["type"] == "switch":
+            returncode, category, skipped_ids = run_switch_step(step, paths, log_path)
+            if returncode == 0:
+                for sid in skipped_ids:
+                    mark_step_status(paths, sid, "skipped")
+                    print(f"  ↷ skipped  {sid}  (switch not matched)", flush=True)
         else:
             returncode, category = run_command_step(step, paths, manifest, policy, log_path)
         duration_seconds = round(time.monotonic() - started_at, 3)
