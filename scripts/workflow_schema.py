@@ -51,6 +51,7 @@ VALID_STEP_TYPES = {
     "wait",
     "merge",
     "workflow",
+    "skill",
 }
 VALID_FAILURE_POLICIES = {"stop", "continue"}
 VALID_SIDECAR_KINDS = {"prompt", "skill"}
@@ -653,6 +654,18 @@ def validate_manifest(
                     _add_issue(
                         issues, "error", manifest_path,
                         f"Step `{step_id}` of type `workflow` must define non-empty `workflow_dir`.",
+                    )
+
+            if step_type == "skill":
+                if not isinstance(step.get("skill"), str) or not step.get("skill"):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` of type `skill` must define non-empty `skill` name.",
+                    )
+                if "instruction" in step and not isinstance(step["instruction"], str):
+                    _add_issue(
+                        issues, "error", manifest_path,
+                        f"Step `{step_id}` field `instruction` must be a string.",
                     )
 
             produces = step.get("produces", [])

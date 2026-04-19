@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+- `type: "skill"` — Run any Codex or Claude Code skill as a workflow step. Loads SKILL.md, builds a combined prompt with artifact context, and calls the claude CLI. Skill name resolves by exact match or case-insensitive prefix.
+- `scripts/discover_skills.py` — Auto-discovers all installed skills from `~/.codex/skills/`, `~/.claude/plugins/cache`, `~/.claude/skills/`, and `~/.claude/plugins/`. Deduplicates by name (more-specific paths win). Returns name, path, source, description, and whether a SKILL.md exists.
+- `--discover-skills` flag — Prints a table of all discovered skills with their source and description.
+- `--generate` skill-awareness — Available skills are injected into the system prompt so generated workflows can include `type: "skill"` steps where appropriate.
+- 5 new tests; 54/54 pass.
+
 ## 1.2.0
 - `type: "http"` — Full HTTP request step: method, URL, headers, body, bearer/basic auth, response stored as JSON artifact. Fails on 4xx/5xx by default (`fail_on_error: false` to override). Template expansion supported in url/headers/body.
 - `type: "switch"` — Multi-way branch: evaluate an expression against named cases, mark non-matching steps as skipped. Equivalent to n8n's Switch node.

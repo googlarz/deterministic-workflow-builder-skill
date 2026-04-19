@@ -1831,5 +1831,110 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("No runs recorded", html)
 
 
+DISCOVER_SCRIPT = SKILL_DIR / "scripts" / "discover_skills.py"
+
+
+class SkillDiscoveryTests(unittest.TestCase):
+    """Tests for discover_skills.py and type:skill step execution."""
+
+    RUN_SCRIPT = SKILL_DIR / "scripts" / "run_workflow.py"
+
+    def _base_step(self, step_id: str, step_type: str, extra: dict | None = None) -> dict:
+        s = {
+            "id": step_id, "name": step_id, "type": step_type,
+            "success_gate": "", "gate_type": "artifact",
+            "requires_approval": False, "retry_limit": 0,
+            "timeout_seconds": 30, "depends_on": [],
+            "produces": [], "consumes": [], "validation_checks": [],
+        }
+        if extra:
+            s.update(extra)
+        return s
+
+    def test_discover_finds_skills_in_custom_path(self) -> None:
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from discover_skills import discover  # type: ignore[import]  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            skills_root = Path(tmp) / "skills"
+            # Create two fake skills
+            for name, has_md in (("code-reviewer", True), ("security-auditor", True)):
+                d = skills_root / name
+                d.mkdir(parents=True)
+                if has_md:
+                    (d / "SKILL.md").write_text(f"# {name}\nDoes {name} things.\n")
+
+            found = discover(extra_paths=[skills_root])
+            names = [s["name"] for s in found]
+            self.assertIn("code-reviewer", names)
+            self.assertIn("security-auditor", names)
+
+    def test_discover_deduplicates_by_name(self) -> None:
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from discover_skills import discover  # type: ignore[import]  # noqa: PLC0415
+
+        with tempfile.TemporaryDirectory() as tmp:
+            root1 = Path(tmp) / "path1"
+            root2 = Path(tmp) / "path2"
+            for r in (root1, root2):
+                d = r / "my-skill"
+                d.mkdir(parents=True)
+                (d / "SKILL.md").write_text("# my-skill\n")
+
+            found = discover(extra_paths=[root1, root2])
+            matching = [s for s in found if s["name"] == "my-skill"]
+            self.assertEqual(len(matching), 1)
+
+    def test_skill_step_not_found_fails_gracefully(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            run_command("python3", str(INIT_SCRIPT), "skill-wf", "--path", str(root), "--steps", "fetch")
+            wf = root / "skill-wf"
+            mp = wf / "workflow.json"
+            m = json.loads(mp.read_text())
+            for s in m["steps"]:
+                s["produces"] = []; s["consumes"] = []; s["validation_checks"] = []
+            m["steps"].append(self._base_step("run-skill", "skill", {
+                "skill": "nonexistent-skill-xyz",
+                "instruction": "do something",
+                "depends_on": ["01-fetch"],
+            }))
+            mp.write_text(json.dumps(m, indent=2) + "\n")
+            (wf / "steps" / "01-fetch.sh").write_text("#!/usr/bin/env bash\necho ok\n")
+            (wf / "steps" / "01-fetch.sh").chmod(0o755)
+
+            result = run_command("python3", str(self.RUN_SCRIPT), str(wf), "--step", "run-skill")
+            self.assertNotEqual(result.returncode, 0)
+            log = (wf / "logs" / "run-skill.log").read_text()
+            self.assertIn("not found", log)
+
+    def test_discover_skills_command_exits_zero(self) -> None:
+        result = run_command("python3", str(self.RUN_SCRIPT), "--discover-skills")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_skill_validation_requires_skill_name(self) -> None:
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
+        from pathlib import Path as P  # noqa: PLC0415, N814
+
+        manifest = {
+            "schema_version": 4, "workflow_name": "sk-val", "version": 1,
+            "goal": "test", "policy_pack": "strict-prod",
+            "graph": {"execution_model": "dag"},
+            "steps": [{
+                "id": "bad-skill", "name": "bad", "type": "skill",
+                # missing "skill" field
+                "success_gate": "", "gate_type": "artifact",
+                "requires_approval": False, "retry_limit": 0, "timeout_seconds": 30,
+            }],
+        }
+        issues = validate_manifest(manifest, P("/fake/workflow.json"))
+        errors = [i for i in issues if i.severity == "error"]
+        self.assertTrue(any("skill" in i.message.lower() for i in errors))
+
+
 if __name__ == "__main__":
     unittest.main()

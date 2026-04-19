@@ -1875,6 +1875,91 @@ def run_workflow_step(
     return proc.returncode, "workflow"
 
 
+def run_skill_step(
+    step: dict[str, Any],
+    paths: WorkflowPaths,
+    log_path: Path,
+) -> tuple[int, str]:
+    """Invoke a named Codex or Claude Code skill as a workflow step."""
+    import importlib.util  # noqa: PLC0415
+
+    skill_name: str = step.get("skill", "")
+    instruction: str = step.get("instruction", "")
+    timeout_seconds = int(step.get("timeout_seconds", 300))
+    pass_artifacts: list[str] = step.get("pass_artifacts", [])
+
+    discover_script = Path(__file__).resolve().parent / "discover_skills.py"
+    spec = importlib.util.spec_from_file_location("discover_skills", discover_script)
+    if spec is None or spec.loader is None:
+        atomic_write_text(log_path, "[skill] discover_skills.py not found\n")
+        return 1, "skill-error"
+    ds = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ds)  # type: ignore[union-attr]
+
+    skills = ds.discover()
+    skill_entry = ds.find_skill(skill_name, skills)
+    if skill_entry is None:
+        atomic_write_text(
+            log_path,
+            f"[skill] Skill '{skill_name}' not found. Available: "
+            + ", ".join(s["name"] for s in skills[:10])
+            + "\n",
+        )
+        return 1, "skill-not-found"
+
+    skill_md = ds.read_skill_md(skill_entry)
+
+    artifact_context = ""
+    for artifact_id in pass_artifacts:
+        raw = _read_artifact(paths, artifact_id)
+        if raw:
+            artifact_context += f"\n\n--- artifact:{artifact_id} ---\n{raw.strip()}\n"
+
+    prompt_parts = []
+    if skill_md:
+        prompt_parts.append(f"Follow the methodology in this skill:\n\n{skill_md}")
+    if artifact_context:
+        prompt_parts.append(f"Workflow artifacts for context:{artifact_context}")
+    if instruction:
+        try:
+            instruction = expand_claude_template(instruction, paths)
+        except ValueError:
+            pass
+        prompt_parts.append(f"Your specific task for this workflow step:\n{instruction}")
+    if not prompt_parts:
+        prompt_parts.append(f"Execute the {skill_name} skill.")
+
+    full_prompt = "\n\n".join(prompt_parts)
+
+    claude_bin = shutil.which("claude")
+    if not claude_bin:
+        atomic_write_text(log_path, "[skill] claude CLI not found — required for skill steps\n")
+        return 1, "missing-dependency"
+
+    try:
+        result = subprocess.run(
+            [claude_bin, "-p", full_prompt, "--model", step.get("model", "claude-sonnet-4-6")],
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            cwd=paths.workflow_dir,
+        )
+    except subprocess.TimeoutExpired:
+        atomic_write_text(log_path, f"[skill] timed out after {timeout_seconds}s\n")
+        return 1, "timeout"
+
+    response = result.stdout or ""
+    artifact_path = paths.workflow_dir / "artifacts" / f"{step['id']}.out"
+    artifact_path.parent.mkdir(parents=True, exist_ok=True)
+    atomic_write_text(artifact_path, response + "\n")
+    atomic_write_text(
+        log_path,
+        f"[skill] {skill_name} ({skill_entry['source']}) exit={result.returncode}\n{response[:500]}\n",
+    )
+
+    return result.returncode, f"skill:{skill_name}"
+
+
 def run_command_step(
     step: dict[str, Any],
     paths: WorkflowPaths,
@@ -1896,6 +1981,8 @@ def run_command_step(
         return run_merge_step(step, paths, log_path)
     if step["type"] == "workflow":
         return run_workflow_step(step, paths, log_path)
+    if step["type"] == "skill":
+        return run_skill_step(step, paths, log_path)
     working_directory = step.get("working_directory", manifest.get("working_directory", "."))
     cwd = resolve_safe_path(paths.workflow_dir, working_directory)
     env = build_step_env(policy)
@@ -2707,6 +2794,37 @@ def _slugify(text: str) -> str:
     return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")[:60]
 
 
+def _load_skill_registry() -> tuple[list[dict[str, Any]], str]:
+    """Load available skills and return (skills_list, formatted_prompt_text)."""
+    import importlib.util  # noqa: PLC0415
+
+    discover_script = Path(__file__).resolve().parent / "discover_skills.py"
+    if not discover_script.exists():
+        return [], ""
+    spec = importlib.util.spec_from_file_location("discover_skills", discover_script)
+    if spec is None or spec.loader is None:
+        return [], ""
+    ds = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(ds)  # type: ignore[union-attr]
+    skills = ds.discover()
+    return skills, ds.format_for_prompt(skills)
+
+
+def discover_skills_command() -> int:
+    """Print all available Codex and Claude Code skills."""
+    skills, formatted = _load_skill_registry()
+    if not skills:
+        print("No skills found. Install Codex skills to ~/.codex/skills/ or Claude Code plugins.")
+        return 0
+    print(f"Available skills ({len(skills)} found):\n")
+    for s in skills:
+        marker = "✓" if s["has_skill_md"] else "·"
+        source = f"[{s['source']}]"
+        desc = s["description"][:70] if s["description"] else ""
+        print(f"  {marker} {s['name']:45s} {source:8s}  {desc}")
+    return 0
+
+
 def generate_workflow(description: str, output_dir: Path) -> int:
     """Generate a workflow.json from a natural language description using Claude."""
     claude_bin = shutil.which("claude")
@@ -2714,8 +2832,20 @@ def generate_workflow(description: str, output_dir: Path) -> int:
         print("[generate] Error: 'claude' CLI not found. Install Claude Code to use --generate.")
         return 1
 
-    full_prompt = f"{_GENERATE_SYSTEM_PROMPT}\nDescription: {description}"
+    skills, skill_section = _load_skill_registry()
+    skill_block = ""
+    if skills:
+        skill_block = (
+            "\n\nAvailable skills (prefer type:\"skill\" with skill:<name> when a skill covers the task):\n"
+            + skill_section
+            + "\n\nFor a skill step use:\n"
+            '  {"id":"...", "type":"skill", "skill":"<name>", "instruction":"<task>", ...}\n'
+        )
+
+    full_prompt = f"{_GENERATE_SYSTEM_PROMPT}{skill_block}\nDescription: {description}"
     print(f"[generate] Calling Claude to design workflow: {description!r}")
+    if skills:
+        print(f"[generate] {len(skills)} skill(s) available for use as steps")
     try:
         result = subprocess.run(
             [claude_bin, "-p", full_prompt, "--model", "claude-sonnet-4-6"],
@@ -2838,6 +2968,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--approve-mutation", default=None, help="Apply a pending mutation by id.")
     parser.add_argument("--reject-mutation", default=None, help="Reject a pending mutation by id.")
     parser.add_argument(
+        "--discover-skills",
+        action="store_true",
+        help="List all available Codex and Claude Code skills.",
+    )
+    parser.add_argument(
         "--generate",
         default=None,
         metavar="DESCRIPTION",
@@ -2864,6 +2999,9 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
+
+    if args.discover_skills:
+        return discover_skills_command()
 
     if args.generate:
         out = Path(args.output_dir) if args.output_dir else Path(_slugify(args.generate))
