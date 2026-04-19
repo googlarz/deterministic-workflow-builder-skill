@@ -1443,6 +1443,7 @@ def run_many(
                 while launchable and len(running) < max_parallel:
                     step_id = launchable.pop(0)
                     pending.remove(step_id)
+                    print(f"  → running  {step_id}", flush=True)
                     step = dict(step_map[step_id])
                     attempts = (
                         read_json_file(paths.runtime_state_path, {"steps": {}})
@@ -1465,6 +1466,13 @@ def run_many(
                         )
                         else 2
                     )
+                    waiting = [
+                        sid
+                        for sid in pending
+                        if read_tsv_state(paths.step_state_path).get(sid) == "waiting-approval"
+                    ]
+                    for sid in waiting:
+                        print(f"  ⏸ approval {sid}  (run --approve {sid} to unblock)", flush=True)
                 break
 
             done, _ = concurrent.futures.wait(
@@ -1475,12 +1483,23 @@ def run_many(
                 result = future.result()
                 record_metrics(paths, run_context, result)
                 if result.returncode == 0:
+                    dur = f"  ({result.duration_seconds:.1f}s)" if result.duration_seconds else ""
+                    print(f"  ✓ complete {step_id}{dur}", flush=True)
                     completed.add(step_id)
-                elif policy.get("failure_policy", {}).get("on_error") != "continue":
-                    stop_launching = True
-                    failure_code = result.returncode
-                elif result.returncode != 0:
-                    failure_code = result.returncode
+                else:
+                    print(f"  ✗ failed   {step_id}  [{result.category}]", flush=True)
+                    if policy.get("failure_policy", {}).get("on_error") != "continue":
+                        stop_launching = True
+                        failure_code = result.returncode
+                    elif result.returncode != 0:
+                        failure_code = result.returncode
+        if failure_code == 3:
+            print(
+                "\nWorkflow paused — waiting for approval. Run --list to see which steps are blocked.",
+                flush=True,
+            )
+        elif failure_code not in (0, 2):
+            print(f"\nWorkflow stopped with errors (exit {failure_code}).", flush=True)
         return failure_code
     finally:
         executor.shutdown(wait=True)
@@ -1656,7 +1675,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Python execution engine for deterministic workflows."
     )
-    parser.add_argument("--workflow-dir", default=".", help="Workflow directory to operate on.")
+    parser.add_argument(
+        "workflow_dir",
+        nargs="?",
+        default=None,
+        help="Workflow directory (positional or use --workflow-dir).",
+    )
+    parser.add_argument(
+        "--workflow-dir",
+        default=None,
+        dest="workflow_dir_flag",
+        help="Workflow directory to operate on.",
+    )
     parser.add_argument(
         "--dry-run", action="store_true", help="Preview execution without running steps."
     )
@@ -1698,7 +1728,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str]) -> int:
     args = parse_args(argv)
-    workflow_dir = resolve_workflow_dir(Path(args.workflow_dir))
+    workflow_dir_raw = args.workflow_dir or args.workflow_dir_flag or "."
+    workflow_dir = resolve_workflow_dir(Path(workflow_dir_raw))
     paths = build_paths(workflow_dir)
     manifest = load_manifest(paths.manifest_path)
     verify_manifest_or_die(manifest, paths)

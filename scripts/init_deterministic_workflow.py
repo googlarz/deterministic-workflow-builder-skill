@@ -100,7 +100,7 @@ def build_manifest(
                 "script": f"steps/{index:02d}-{step}.sh",
                 "executor_config": {},
                 "commands": [f"./steps/{index:02d}-{step}.sh"],
-                "success_gate": "TODO",
+                "success_gate": "",
                 "gate_type": "artifact",
                 "validation_checks": [
                     {
