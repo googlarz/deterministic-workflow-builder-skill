@@ -1449,7 +1449,7 @@ def validate_output_schema(response: str, schema: dict[str, Any]) -> tuple[bool,
     try:
         parsed = json.loads(response)
     except json.JSONDecodeError:
-        return False, f"claude step output_schema: response is not valid JSON"
+        return False, "claude step output_schema: response is not valid JSON"
     if not isinstance(parsed, dict):
         return False, "claude step output_schema: response JSON must be an object"
     missing = [k for k in required_keys if k not in parsed]
@@ -2992,7 +2992,7 @@ def generate_workflow(description: str, output_dir: Path) -> int:
 
     print(f"[generate] Created workflow at {output_dir}/")
     print(f"  workflow.json  ({len(steps)} steps)")
-    print(f"  run_workflow.sh")
+    print("  run_workflow.sh")
     return 0
 
 
@@ -3033,7 +3033,7 @@ def _import_n8n_command(n8n_path: Path, output_dir: Path | None) -> int:
     print(f"[import-n8n] '{n8n_export.get('name')}' → {output_dir}/")
     print(f"  {n_steps} step(s), {n_triggers} trigger(s), {len(proposals)} improvement proposal(s)")
     if proposals:
-        print(f"  Review improvements: ./run_workflow.sh --list-mutations")
+        print("  Review improvements: ./run_workflow.sh --list-mutations")
     return 0
 
 

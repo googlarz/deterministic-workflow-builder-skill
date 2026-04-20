@@ -1312,9 +1312,8 @@ DASHBOARD_SCRIPT = SKILL_DIR / "scripts" / "dashboard.py"
 
 def _scaffold_minimal(root: Path, name: str, extra_steps: list[dict] | None = None) -> Path:
     """Create a minimal valid workflow for new-feature tests."""
-    import sys  # noqa: PLC0415
 
-    result = run_command(
+    run_command(
         "python3",
         str(INIT_SCRIPT),
         name,
@@ -1345,7 +1344,7 @@ class ClaudeStepTests(unittest.TestCase):
     def test_claude_step_writes_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
-            fake_claude = self._fake_claude_bin(tmp, "hello from claude")
+            self._fake_claude_bin(tmp, "hello from claude")
 
             result = run_command(
                 "python3",
@@ -1410,7 +1409,9 @@ class ClaudeStepTests(unittest.TestCase):
     def test_extract_json_from_claude_output(self) -> None:
         import sys  # noqa: PLC0415
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
-        from run_workflow import extract_json_from_claude_output  # type: ignore[import]  # noqa: PLC0415
+        from run_workflow import (
+            extract_json_from_claude_output,  # type: ignore[import]  # noqa: PLC0415
+        )
 
         # fenced block
         output = 'Sure!\n```json\n{"a": 1}\n```\nDone.'
@@ -1425,7 +1426,7 @@ class BranchStepTests(unittest.TestCase):
     """Tests for type:branch steps."""
 
     def _make_branch_workflow(self, root: Path, name: str, condition_exit: int) -> Path:
-        result = run_command(
+        run_command(
             "python3", str(INIT_SCRIPT), name, "--path", str(root), "--steps", "fetch",
         )
         workflow_dir = root / name
@@ -1587,7 +1588,9 @@ class TriggerTests(unittest.TestCase):
             tmp = Path(tmp_str)
             import sys  # noqa: PLC0415
             sys.path.insert(0, str(SKILL_DIR / "scripts"))
-            from schedule_workflow import install_webhook_trigger  # type: ignore[import]  # noqa: PLC0415
+            from schedule_workflow import (
+                install_webhook_trigger,  # type: ignore[import]  # noqa: PLC0415
+            )
 
             workflow_dir = tmp / "webhook-wf"
             workflow_dir.mkdir()
@@ -1633,8 +1636,8 @@ class NewStepTypeTests(unittest.TestCase):
 
     # ── http ──────────────────────────────────────────────────────────────────
     def test_http_step_calls_url_and_writes_artifact(self) -> None:
-        import http.server, threading  # noqa: E401, PLC0415
-        responses = []
+        import http.server  # noqa: E401, PLC0415
+        import threading
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 self.send_response(200); self.end_headers()
@@ -1662,7 +1665,8 @@ class NewStepTypeTests(unittest.TestCase):
             self.assertEqual(data["status_code"], 200)
 
     def test_http_step_fails_on_4xx_by_default(self) -> None:
-        import http.server, threading  # noqa: E401, PLC0415
+        import http.server  # noqa: E401, PLC0415
+        import threading
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
                 self.send_response(404); self.end_headers()
@@ -1796,7 +1800,10 @@ class DashboardTests(unittest.TestCase):
             tmp = Path(tmp_str)
             import sys  # noqa: PLC0415
             sys.path.insert(0, str(SKILL_DIR / "scripts"))
-            from dashboard import load_all_runs, generate_dashboard_html  # type: ignore[import]  # noqa: PLC0415
+            from dashboard import (  # type: ignore[import]  # noqa: PLC0415
+                generate_dashboard_html,
+                load_all_runs,
+            )
 
             audit_root = tmp / "audit"
             run_dir = audit_root / "runs" / "run-0001"
@@ -1821,14 +1828,12 @@ class DashboardTests(unittest.TestCase):
             self.assertIn("test-workflow", html)
 
     def test_dashboard_empty_runs_shows_fallback(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp_str:
-            tmp = Path(tmp_str)
-            import sys  # noqa: PLC0415
-            sys.path.insert(0, str(SKILL_DIR / "scripts"))
-            from dashboard import generate_dashboard_html  # type: ignore[import]  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+        sys.path.insert(0, str(SKILL_DIR / "scripts"))
+        from dashboard import generate_dashboard_html  # type: ignore[import]  # noqa: PLC0415
 
-            html = generate_dashboard_html([], "empty-wf")
-            self.assertIn("No runs recorded", html)
+        html = generate_dashboard_html([], "empty-wf")
+        self.assertIn("No runs recorded", html)
 
 
 DISCOVER_SCRIPT = SKILL_DIR / "scripts" / "discover_skills.py"
@@ -1917,8 +1922,9 @@ class SkillDiscoveryTests(unittest.TestCase):
     def test_skill_validation_requires_skill_name(self) -> None:
         import sys  # noqa: PLC0415
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
-        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
         from pathlib import Path as P  # noqa: PLC0415, N814
+
+        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
 
         manifest = {
             "schema_version": 4, "workflow_name": "sk-val", "version": 1,
@@ -2001,8 +2007,9 @@ class BrowserAndComputerUseTests(unittest.TestCase):
     def test_browser_schema_requires_instruction(self) -> None:
         import sys  # noqa: PLC0415
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
-        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
         from pathlib import Path as P  # noqa: PLC0415, N814
+
+        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
 
         manifest = {
             "schema_version": 4, "workflow_name": "b-val", "version": 1,
@@ -2021,8 +2028,9 @@ class BrowserAndComputerUseTests(unittest.TestCase):
     def test_computer_use_schema_requires_instruction(self) -> None:
         import sys  # noqa: PLC0415
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
-        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
         from pathlib import Path as P  # noqa: PLC0415, N814
+
+        from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
 
         manifest = {
             "schema_version": 4, "workflow_name": "cu-val", "version": 1,
