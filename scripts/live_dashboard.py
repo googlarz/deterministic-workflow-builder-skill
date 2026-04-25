@@ -13,7 +13,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import threading
 import time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
@@ -226,7 +225,10 @@ class _Handler(BaseHTTPRequestHandler):
 
 def serve_live(workflow_dir: Path, port: int = 7474) -> None:
     """Start the live dashboard server (blocks until KeyboardInterrupt)."""
-    from run_workflow import build_paths, load_manifest  # local import to avoid circular  # noqa: PLC0415
+    from run_workflow import (  # local import to avoid circular  # noqa: PLC0415
+        build_paths,
+        load_manifest,
+    )
 
     paths = build_paths(workflow_dir)
     manifest = load_manifest(paths.manifest_path)

@@ -2215,6 +2215,7 @@ class SecurityFixTests(unittest.TestCase):
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
+
         import import_n8n  # noqa: PLC0415
         importlib.reload(import_n8n)
         return import_n8n
@@ -2224,6 +2225,7 @@ class SecurityFixTests(unittest.TestCase):
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
+
         import run_workflow  # noqa: PLC0415
         importlib.reload(run_workflow)
         return run_workflow
@@ -2233,6 +2235,7 @@ class SecurityFixTests(unittest.TestCase):
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
+
         import schedule_workflow  # noqa: PLC0415
         importlib.reload(schedule_workflow)
         return schedule_workflow
@@ -2505,6 +2508,7 @@ class MutationClassifierTests(unittest.TestCase):
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
+
         import mutation_classifier  # noqa: PLC0415
         importlib.reload(mutation_classifier)
         return mutation_classifier
@@ -2628,6 +2632,7 @@ class ParallelAndImprovementTests(unittest.TestCase):
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
+
         import run_workflow  # noqa: PLC0415
         importlib.reload(run_workflow)
         return run_workflow
@@ -2636,9 +2641,7 @@ class ParallelAndImprovementTests(unittest.TestCase):
 
     def test_max_parallel_read_from_manifest_graph(self) -> None:
         """max_parallel in manifest graph should be respected when policy omits it."""
-        rw = self._load_runner()
-        # Access the resolution logic indirectly by reading the relevant
-        # lines: policy overrides manifest which overrides default of 1.
+        # Access the resolution logic indirectly — same formula as run_workflow.py.
         manifest = {
             "schema_version": 4, "workflow_name": "p-test", "version": 1,
             "goal": "test", "policy_pack": "strict-prod",
