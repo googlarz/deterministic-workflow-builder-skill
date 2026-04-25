@@ -1059,7 +1059,9 @@ def run_improvement_cycle(
             approved += 1
             if verbose:
                 risk = mc.classify_risk(mut)
-                print(f"[improve] ✓ auto-approved {mut['id']}  [{risk}]  {mut.get('description', '')[:60]}")
+                print(
+                    f"[improve] ✓ auto-approved {mut['id']}  [{risk}]  {mut.get('description', '')[:60]}"
+                )
 
     if approved and verbose:
         print(f"[improve] Applied {approved} mutation(s). Re-run the workflow to use them.")
@@ -1635,7 +1637,9 @@ def run_branch_step(
         branch_taken = "true" if result.returncode == 0 else "false"
         skipped = on_false if result.returncode == 0 else on_true
         with log_path.open("a", encoding="utf-8") as handle:
-            handle.write(f"\n[branch] condition exited {result.returncode} → branch={branch_taken}\n")
+            handle.write(
+                f"\n[branch] condition exited {result.returncode} → branch={branch_taken}\n"
+            )
         return 0, f"branch:{branch_taken}", skipped
     except subprocess.TimeoutExpired:
         atomic_write_text(log_path, "[runner] branch condition timed out\n")
@@ -1692,6 +1696,7 @@ def run_http_step(
             raw_headers["Authorization"] = f"Bearer {token}"
         elif auth_type == "basic":
             import base64  # noqa: PLC0415
+
             username = expand_claude_template(auth.get("username", ""), paths)
             password = expand_claude_template(auth.get("password", ""), paths)
             creds = base64.b64encode(f"{username}:{password}".encode()).decode()
@@ -2051,7 +2056,9 @@ def _run_claude_with_tools(
     """Shared runner for browser and computer-use steps: call claude CLI with restricted tools."""
     claude_bin = shutil.which("claude")
     if not claude_bin:
-        atomic_write_text(log_path, f"[{log_prefix}] claude CLI not found — required for {log_prefix} steps\n")
+        atomic_write_text(
+            log_path, f"[{log_prefix}] claude CLI not found — required for {log_prefix} steps\n"
+        )
         return 1, "missing-dependency"
 
     try:
@@ -2104,7 +2111,9 @@ def run_browser_step(
 ) -> tuple[int, str]:
     """Execute a browser automation step via Claude + Chrome MCP integration."""
     return _run_claude_with_tools(
-        step, paths, log_path,
+        step,
+        paths,
+        log_path,
         allowed_tools="mcp__Claude_in_Chrome__navigate,mcp__Claude_in_Chrome__read_page,mcp__Claude_in_Chrome__get_page_text,mcp__Claude_in_Chrome__find,mcp__Claude_in_Chrome__form_input,mcp__Claude_in_Chrome__javascript_tool,mcp__Claude_in_Chrome__read_network_requests,mcp__Claude_in_Chrome__read_console_messages,mcp__Claude_in_Chrome__tabs_create_mcp,mcp__Claude_in_Chrome__tabs_close_mcp",
         log_prefix="browser",
     )
@@ -2117,7 +2126,9 @@ def run_computer_use_step(
 ) -> tuple[int, str]:
     """Execute a desktop automation step via Claude + computer-use MCP."""
     return _run_claude_with_tools(
-        step, paths, log_path,
+        step,
+        paths,
+        log_path,
         allowed_tools="mcp__computer-use__screenshot,mcp__computer-use__left_click,mcp__computer-use__type,mcp__computer-use__key,mcp__computer-use__scroll,mcp__computer-use__mouse_move,mcp__computer-use__double_click,mcp__computer-use__right_click,mcp__computer-use__open_application,mcp__computer-use__computer_batch",
         log_prefix="computer-use",
     )
@@ -2699,7 +2710,9 @@ def run_many(
                 # Refresh skipped set in case a branch step just wrote new skipped entries
                 fresh_state = read_tsv_state(paths.step_state_path)
                 newly_skipped = {
-                    sid for sid, st in fresh_state.items() if st == "skipped" and sid not in completed
+                    sid
+                    for sid, st in fresh_state.items()
+                    if st == "skipped" and sid not in completed
                 }
                 for sid in newly_skipped:
                     completed.add(sid)
@@ -3006,7 +3019,7 @@ def generate_workflow(description: str, output_dir: Path) -> int:
     skill_block = ""
     if skills:
         skill_block = (
-            "\n\nAvailable skills (prefer type:\"skill\" with skill:<name> when a skill covers the task):\n"
+            '\n\nAvailable skills (prefer type:"skill" with skill:<name> when a skill covers the task):\n'
             + skill_section
             + "\n\nFor a skill step use:\n"
             '  {"id":"...", "type":"skill", "skill":"<name>", "instruction":"<task>", ...}\n'
@@ -3056,7 +3069,7 @@ def generate_workflow(description: str, output_dir: Path) -> int:
     run_sh = output_dir / "run_workflow.sh"
     runner_path = Path(__file__).resolve()
     run_sh.write_text(
-        f"#!/usr/bin/env bash\nexec python3 {runner_path} \"$(dirname \"$0\")\" \"$@\"\n",
+        f'#!/usr/bin/env bash\nexec python3 {runner_path} "$(dirname "$0")" "$@"\n',
         encoding="utf-8",
     )
     run_sh.chmod(0o755)
@@ -3107,7 +3120,7 @@ def _import_n8n_command(n8n_path: Path, output_dir: Path | None) -> int:
     runner_path = Path(__file__).resolve()
     run_sh = output_dir / "run_workflow.sh"
     run_sh.write_text(
-        f"#!/usr/bin/env bash\nexec python3 {runner_path} \"$(dirname \"$0\")\" \"$@\"\n",
+        f'#!/usr/bin/env bash\nexec python3 {runner_path} "$(dirname "$0")" "$@"\n',
         encoding="utf-8",
     )
     run_sh.chmod(0o755)
@@ -3242,7 +3255,9 @@ def main(argv: list[str]) -> int:
         return discover_skills_command()
 
     if args.import_n8n:
-        return _import_n8n_command(Path(args.import_n8n), Path(args.output_dir) if args.output_dir else None)
+        return _import_n8n_command(
+            Path(args.import_n8n), Path(args.output_dir) if args.output_dir else None
+        )
 
     if args.generate:
         out = Path(args.output_dir) if args.output_dir else Path(_slugify(args.generate))
@@ -3305,8 +3320,12 @@ def main(argv: list[str]) -> int:
         if args.dashboard:
             return generate_dashboard(paths)
         if args.improve:
-            max_risk = args.improve_max_risk or manifest.get("auto_improve", {}).get("max_risk", "low")
-            return 0 if run_improvement_cycle(paths, manifest, policy, max_risk=max_risk) >= 0 else 1
+            max_risk = args.improve_max_risk or manifest.get("auto_improve", {}).get(
+                "max_risk", "low"
+            )
+            return (
+                0 if run_improvement_cycle(paths, manifest, policy, max_risk=max_risk) >= 0 else 1
+            )
         if args.step is not None:
             step = get_steps_by_id(manifest).get(args.step)
             if step is None:

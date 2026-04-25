@@ -131,7 +131,11 @@ def generate_dashboard_html(runs: list[dict[str, Any]], workflow_name: str) -> s
             <td>{_status_badge(run.get("status", "unknown"))}</td>
         </tr>"""
 
-    no_runs_msg = "" if runs else '<p style="color:#6b7280;text-align:center;padding:32px">No runs recorded yet.</p>'
+    no_runs_msg = (
+        ""
+        if runs
+        else '<p style="color:#6b7280;text-align:center;padding:32px">No runs recorded yet.</p>'
+    )
 
     return f"""<!DOCTYPE html>
 <html lang="en">

@@ -8,6 +8,7 @@ Usage:
     python3 live_dashboard.py <workflow-dir> [--port 7474]
     # or via run_workflow.py --live [PORT]
 """
+
 from __future__ import annotations
 
 import argparse

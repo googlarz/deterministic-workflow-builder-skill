@@ -149,9 +149,7 @@ def install_schedule_trigger(trigger: dict, workflow_dir: Path) -> int:
     else:
         existing = ""
         try:
-            result = subprocess.run(
-                ["crontab", "-l"], capture_output=True, text=True, check=False
-            )
+            result = subprocess.run(["crontab", "-l"], capture_output=True, text=True, check=False)
             existing = result.stdout if result.returncode == 0 else ""
         except FileNotFoundError:
             print("[triggers] crontab not available on this system.", file=sys.stderr)

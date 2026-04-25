@@ -578,53 +578,77 @@ def validate_manifest(
             if step_type == "http":
                 if not isinstance(step.get("url"), str) or not step.get("url"):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `http` must define non-empty `url`.",
                     )
                 method = step.get("method", "GET")
                 if method not in {"GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"}:
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` has invalid HTTP `method` `{method}`.",
                     )
 
             if step_type == "switch":
                 if not isinstance(step.get("expression"), str):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `switch` must define string `expression`.",
                     )
                 cases = step.get("cases")
                 if not isinstance(cases, list):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `switch` must define list `cases`.",
                     )
                 else:
                     all_step_ids = {s.get("id") for s in manifest.get("steps", [])}
                     for ci, case in enumerate(cases):
                         if not isinstance(case, dict):
-                            _add_issue(issues, "error", manifest_path,
-                                       f"Step `{step_id}` case #{ci} must be an object.")
+                            _add_issue(
+                                issues,
+                                "error",
+                                manifest_path,
+                                f"Step `{step_id}` case #{ci} must be an object.",
+                            )
                             continue
                         for ref_id in case.get("steps", []):
                             if ref_id not in all_step_ids:
-                                _add_issue(issues, "error", manifest_path,
-                                           f"Step `{step_id}` case #{ci} references unknown step `{ref_id}`.")
+                                _add_issue(
+                                    issues,
+                                    "error",
+                                    manifest_path,
+                                    f"Step `{step_id}` case #{ci} references unknown step `{ref_id}`.",
+                                )
                     for ref_id in step.get("default", []):
                         if ref_id not in all_step_ids:
-                            _add_issue(issues, "error", manifest_path,
-                                       f"Step `{step_id}` `default` references unknown step `{ref_id}`.")
+                            _add_issue(
+                                issues,
+                                "error",
+                                manifest_path,
+                                f"Step `{step_id}` `default` references unknown step `{ref_id}`.",
+                            )
 
             if step_type == "loop":
                 if not isinstance(step.get("items_from"), str) or not step.get("items_from"):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `loop` must define non-empty `items_from`.",
                     )
                 if not isinstance(step.get("script"), str) or not step.get("script"):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `loop` must define non-empty `script`.",
                     )
 
@@ -633,7 +657,9 @@ def validate_manifest(
                 has_until = isinstance(step.get("until"), str) and step.get("until")
                 if not has_seconds and not has_until:
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `wait` must define `seconds` (number) or `until` (script path).",
                     )
 
@@ -641,39 +667,51 @@ def validate_manifest(
                 inputs = step.get("inputs")
                 if not isinstance(inputs, list) or not inputs:
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `merge` must define non-empty list `inputs`.",
                     )
                 mode = step.get("mode", "concat")
                 if mode not in {"concat", "zip", "first"}:
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` has invalid `mode` `{mode}`; must be concat|zip|first.",
                     )
 
             if step_type == "workflow":
                 if not isinstance(step.get("workflow_dir"), str) or not step.get("workflow_dir"):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `workflow` must define non-empty `workflow_dir`.",
                     )
 
             if step_type == "skill":
                 if not isinstance(step.get("skill"), str) or not step.get("skill"):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `skill` must define non-empty `skill` name.",
                     )
                 if "instruction" in step and not isinstance(step["instruction"], str):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` field `instruction` must be a string.",
                     )
 
             if step_type in ("browser", "computer-use"):
                 if not isinstance(step.get("instruction"), str) or not step.get("instruction"):
                     _add_issue(
-                        issues, "error", manifest_path,
+                        issues,
+                        "error",
+                        manifest_path,
                         f"Step `{step_id}` of type `{step_type}` must define non-empty `instruction`.",
                     )
 
@@ -969,11 +1007,17 @@ def validate_manifest(
                 )
             if ttype == "schedule" and not isinstance(trigger.get("cron"), str):
                 _add_issue(
-                    issues, "error", manifest_path, f"Schedule trigger #{i} must define string `cron`."
+                    issues,
+                    "error",
+                    manifest_path,
+                    f"Schedule trigger #{i} must define string `cron`.",
                 )
             if ttype == "webhook" and not isinstance(trigger.get("port"), int):
                 _add_issue(
-                    issues, "error", manifest_path, f"Webhook trigger #{i} must define integer `port`."
+                    issues,
+                    "error",
+                    manifest_path,
+                    f"Webhook trigger #{i} must define integer `port`.",
                 )
 
     return issues

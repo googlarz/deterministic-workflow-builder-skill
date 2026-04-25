@@ -94,6 +94,7 @@ def _node_id(node: dict) -> str:
 # Per-type parameter mapping
 # ---------------------------------------------------------------------------
 
+
 def _map_http_node(node: dict, step: dict) -> None:
     params = node.get("parameters", {})
     step["method"] = params.get("method", "GET").upper()
@@ -140,8 +141,16 @@ def _map_branch_node(node: dict, step: dict, connections: dict, id_map: dict) ->
     # Resolve true/false downstream step IDs from n8n output indices
     node_name = node.get("name", "")
     outputs = connections.get(node_name, {}).get("main", [])
-    true_ids = [id_map[c["node"]] for c in (outputs[0] if len(outputs) > 0 else []) if c.get("node") in id_map]
-    false_ids = [id_map[c["node"]] for c in (outputs[1] if len(outputs) > 1 else []) if c.get("node") in id_map]
+    true_ids = [
+        id_map[c["node"]]
+        for c in (outputs[0] if len(outputs) > 0 else [])
+        if c.get("node") in id_map
+    ]
+    false_ids = [
+        id_map[c["node"]]
+        for c in (outputs[1] if len(outputs) > 1 else [])
+        if c.get("node") in id_map
+    ]
     step["on_true"] = true_ids
     step["on_false"] = false_ids
 
@@ -176,7 +185,11 @@ def _map_switch_node(node: dict, step: dict, connections: dict, id_map: dict) ->
     cases: dict[str, list[str]] = {}
     for i, rule in enumerate(rules):
         key = rule.get("outputKey", str(i))
-        out_ids = [id_map[c["node"]] for c in (outputs[i] if i < len(outputs) else []) if c.get("node") in id_map]
+        out_ids = [
+            id_map[c["node"]]
+            for c in (outputs[i] if i < len(outputs) else [])
+            if c.get("node") in id_map
+        ]
         cases[key] = out_ids
     if cases:
         step["cases"] = cases
@@ -214,6 +227,7 @@ def _map_service_node(node: dict, step: dict) -> None:
 # Graph helpers
 # ---------------------------------------------------------------------------
 
+
 def _build_deps(
     nodes: list[dict], connections: dict[str, Any], id_map: dict[str, str]
 ) -> dict[str, list[str]]:
@@ -224,7 +238,7 @@ def _build_deps(
         if src_id is None:
             continue
         for output_list in outputs.get("main", []):
-            for conn in (output_list or []):
+            for conn in output_list or []:
                 dst_id = id_map.get(conn.get("node", ""))
                 if dst_id and dst_id != src_id and src_id not in deps.get(dst_id, []):
                     deps.setdefault(dst_id, []).append(src_id)
@@ -274,18 +288,21 @@ def _extract_triggers(nodes: list[dict]) -> list[dict]:
                     cron_expr = f"0 */{val} * * *"
             triggers.append({"type": "schedule", "cron": cron_expr, "name": node.get("name")})
         elif ntype == "n8n-nodes-base.webhook":
-            triggers.append({
-                "type": "webhook",
-                "path": params.get("path", "/" + _slugify(node.get("name", "webhook"))),
-                "method": params.get("httpMethod", "POST"),
-                "name": node.get("name"),
-            })
+            triggers.append(
+                {
+                    "type": "webhook",
+                    "path": params.get("path", "/" + _slugify(node.get("name", "webhook"))),
+                    "method": params.get("httpMethod", "POST"),
+                    "name": node.get("name"),
+                }
+            )
     return triggers
 
 
 # ---------------------------------------------------------------------------
 # Improvement proposals
 # ---------------------------------------------------------------------------
+
 
 def _improvement_proposals(steps: list[dict]) -> list[dict]:
     """Return pending mutation proposals that improve the imported workflow."""
@@ -295,61 +312,71 @@ def _improvement_proposals(steps: list[dict]) -> list[dict]:
         stype = step.get("type", "shell")
 
         if "consider upgrading to type:mcp" in note:
-            proposals.append({
-                "proposal_id": str(uuid.uuid4())[:8],
-                "id": f"improve-{step['id']}-mcp",
-                "type": "modify_step",
-                "step_id": step["id"],
-                "status": "pending",
-                "rationale": (
-                    f"Step '{step['id']}' was an n8n service node, mapped to a placeholder HTTP call. "
-                    "Upgrade to type:mcp using an appropriate Claude MCP server for reliable integration."
-                ),
-                "suggested_changes": {"type": "mcp", "url": None},
-            })
-
-        if "code node lang=" in note:
-            proposals.append({
-                "proposal_id": str(uuid.uuid4())[:8],
-                "id": f"improve-{step['id']}-port",
-                "type": "modify_step",
-                "step_id": step["id"],
-                "status": "pending",
-                "rationale": (
-                    f"Step '{step['id']}' contains inline n8n code that must be ported to a shell/Python script. "
-                    f"See _n8n_note: {note[:120]}"
-                ),
-                "suggested_changes": {"script": f"steps/{step['id']}.sh"},
-            })
-
-        if stype == "http":
-            url = step.get("url", "")
-            if "TODO" in str(url):
-                proposals.append({
+            proposals.append(
+                {
                     "proposal_id": str(uuid.uuid4())[:8],
-                    "id": f"improve-{step['id']}-url",
+                    "id": f"improve-{step['id']}-mcp",
                     "type": "modify_step",
                     "step_id": step["id"],
                     "status": "pending",
                     "rationale": (
-                        f"Step '{step['id']}' has a placeholder URL. Replace with the real endpoint."
+                        f"Step '{step['id']}' was an n8n service node, mapped to a placeholder HTTP call. "
+                        "Upgrade to type:mcp using an appropriate Claude MCP server for reliable integration."
                     ),
-                    "suggested_changes": {"url": "<REAL_ENDPOINT_HERE>"},
-                })
+                    "suggested_changes": {"type": "mcp", "url": None},
+                }
+            )
+
+        if "code node lang=" in note:
+            proposals.append(
+                {
+                    "proposal_id": str(uuid.uuid4())[:8],
+                    "id": f"improve-{step['id']}-port",
+                    "type": "modify_step",
+                    "step_id": step["id"],
+                    "status": "pending",
+                    "rationale": (
+                        f"Step '{step['id']}' contains inline n8n code that must be ported to a shell/Python script. "
+                        f"See _n8n_note: {note[:120]}"
+                    ),
+                    "suggested_changes": {"script": f"steps/{step['id']}.sh"},
+                }
+            )
+
+        if stype == "http":
+            url = step.get("url", "")
+            if "TODO" in str(url):
+                proposals.append(
+                    {
+                        "proposal_id": str(uuid.uuid4())[:8],
+                        "id": f"improve-{step['id']}-url",
+                        "type": "modify_step",
+                        "step_id": step["id"],
+                        "status": "pending",
+                        "rationale": (
+                            f"Step '{step['id']}' has a placeholder URL. Replace with the real endpoint."
+                        ),
+                        "suggested_changes": {"url": "<REAL_ENDPOINT_HERE>"},
+                    }
+                )
 
         if stype == "branch" and step.get("_condition_expr"):
-            proposals.append({
-                "proposal_id": str(uuid.uuid4())[:8],
-                "id": f"improve-{step['id']}-condition",
-                "type": "modify_step",
-                "step_id": step["id"],
-                "status": "pending",
-                "rationale": (
-                    f"Branch step '{step['id']}' auto-generated condition: "
-                    f"{step['_condition_expr']!r}. Verify it matches original n8n logic."
-                ),
-                "suggested_changes": {"script": step.get("script", f"steps/{step['id']}-condition.sh")},
-            })
+            proposals.append(
+                {
+                    "proposal_id": str(uuid.uuid4())[:8],
+                    "id": f"improve-{step['id']}-condition",
+                    "type": "modify_step",
+                    "step_id": step["id"],
+                    "status": "pending",
+                    "rationale": (
+                        f"Branch step '{step['id']}' auto-generated condition: "
+                        f"{step['_condition_expr']!r}. Verify it matches original n8n logic."
+                    ),
+                    "suggested_changes": {
+                        "script": step.get("script", f"steps/{step['id']}-condition.sh")
+                    },
+                }
+            )
 
     return proposals
 
@@ -357,6 +384,7 @@ def _improvement_proposals(steps: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 # Main conversion
 # ---------------------------------------------------------------------------
+
 
 def convert(n8n_export: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
     """
@@ -458,6 +486,7 @@ def convert(n8n_export: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
 # ---------------------------------------------------------------------------
 # Scaffold output directory
 # ---------------------------------------------------------------------------
+
 
 def scaffold(manifest: dict[str, Any], proposals: list[dict], output_dir: Path) -> None:
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -1348,29 +1348,40 @@ class ClaudeStepTests(unittest.TestCase):
 
             result = run_command(
                 "python3",
-                str(INIT_SCRIPT), "claude-wf", "--path", str(tmp), "--steps", "fetch",
+                str(INIT_SCRIPT),
+                "claude-wf",
+                "--path",
+                str(tmp),
+                "--steps",
+                "fetch",
             )
             workflow_dir = tmp / "claude-wf"
             manifest_path = workflow_dir / "workflow.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["steps"].append({
-                "id": "summarise",
-                "name": "Summarise output",
-                "type": "claude",
-                "prompt": "Say hello",
-                "success_gate": "",
-                "gate_type": "artifact",
-                "requires_approval": False,
-                "retry_limit": 0,
-                "timeout_seconds": 30,
-                "depends_on": [],
-            })
+            manifest["steps"].append(
+                {
+                    "id": "summarise",
+                    "name": "Summarise output",
+                    "type": "claude",
+                    "prompt": "Say hello",
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 30,
+                    "depends_on": [],
+                }
+            )
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
             env = dict(os.environ)
             env["PATH"] = str(tmp) + ":" + env.get("PATH", "")
             result = run_command(
-                "python3", str(RUN_SCRIPT), str(workflow_dir), "--step", "summarise",
+                "python3",
+                str(RUN_SCRIPT),
+                str(workflow_dir),
+                "--step",
+                "summarise",
                 env=env,
             )
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -1383,31 +1394,42 @@ class ClaudeStepTests(unittest.TestCase):
             tmp = Path(tmp_str)
             result = run_command(
                 "python3",
-                str(INIT_SCRIPT), "claude-validate-wf", "--path", str(tmp), "--steps", "fetch",
+                str(INIT_SCRIPT),
+                "claude-validate-wf",
+                "--path",
+                str(tmp),
+                "--steps",
+                "fetch",
             )
             workflow_dir = tmp / "claude-validate-wf"
             manifest_path = workflow_dir / "workflow.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["steps"].append({
-                "id": "no-prompt",
-                "name": "Missing prompt",
-                "type": "claude",
-                "success_gate": "",
-                "gate_type": "artifact",
-                "requires_approval": False,
-                "retry_limit": 0,
-                "timeout_seconds": 30,
-                "depends_on": [],
-            })
+            manifest["steps"].append(
+                {
+                    "id": "no-prompt",
+                    "name": "Missing prompt",
+                    "type": "claude",
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 30,
+                    "depends_on": [],
+                }
+            )
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             result = run_command(
-                "python3", str(RUN_SCRIPT), str(workflow_dir), "--list",
+                "python3",
+                str(RUN_SCRIPT),
+                str(workflow_dir),
+                "--list",
             )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("prompt", result.stderr + result.stdout)
 
     def test_extract_json_from_claude_output(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from run_workflow import (
             extract_json_from_claude_output,  # type: ignore[import]  # noqa: PLC0415
@@ -1427,14 +1449,18 @@ class BranchStepTests(unittest.TestCase):
 
     def _make_branch_workflow(self, root: Path, name: str, condition_exit: int) -> Path:
         run_command(
-            "python3", str(INIT_SCRIPT), name, "--path", str(root), "--steps", "fetch",
+            "python3",
+            str(INIT_SCRIPT),
+            name,
+            "--path",
+            str(root),
+            "--steps",
+            "fetch",
         )
         workflow_dir = root / name
 
         cond_script = workflow_dir / "steps" / "check.sh"
-        cond_script.write_text(
-            f"#!/usr/bin/env bash\nexit {condition_exit}\n", encoding="utf-8"
-        )
+        cond_script.write_text(f"#!/usr/bin/env bash\nexit {condition_exit}\n", encoding="utf-8")
         cond_script.chmod(0o755)
 
         for sid in ("on-true-step", "on-false-step"):
@@ -1449,46 +1475,48 @@ class BranchStepTests(unittest.TestCase):
             step["produces"] = []
             step["consumes"] = []
             step["validation_checks"] = []
-        manifest["steps"].extend([
-            {
-                "id": "branch-gate",
-                "name": "Branch gate",
-                "type": "branch",
-                "condition": "steps/check.sh",
-                "on_true": ["on-true-step"],
-                "on_false": ["on-false-step"],
-                "success_gate": "",
-                "gate_type": "artifact",
-                "requires_approval": False,
-                "retry_limit": 0,
-                "timeout_seconds": 10,
-                "depends_on": ["01-fetch"],
-            },
-            {
-                "id": "on-true-step",
-                "name": "On-true step",
-                "type": "shell",
-                "script": "steps/on-true-step.sh",
-                "success_gate": "",
-                "gate_type": "artifact",
-                "requires_approval": False,
-                "retry_limit": 0,
-                "timeout_seconds": 10,
-                "depends_on": ["branch-gate"],
-            },
-            {
-                "id": "on-false-step",
-                "name": "On-false step",
-                "type": "shell",
-                "script": "steps/on-false-step.sh",
-                "success_gate": "",
-                "gate_type": "artifact",
-                "requires_approval": False,
-                "retry_limit": 0,
-                "timeout_seconds": 10,
-                "depends_on": ["branch-gate"],
-            },
-        ])
+        manifest["steps"].extend(
+            [
+                {
+                    "id": "branch-gate",
+                    "name": "Branch gate",
+                    "type": "branch",
+                    "condition": "steps/check.sh",
+                    "on_true": ["on-true-step"],
+                    "on_false": ["on-false-step"],
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 10,
+                    "depends_on": ["01-fetch"],
+                },
+                {
+                    "id": "on-true-step",
+                    "name": "On-true step",
+                    "type": "shell",
+                    "script": "steps/on-true-step.sh",
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 10,
+                    "depends_on": ["branch-gate"],
+                },
+                {
+                    "id": "on-false-step",
+                    "name": "On-false step",
+                    "type": "shell",
+                    "script": "steps/on-false-step.sh",
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 10,
+                    "depends_on": ["branch-gate"],
+                },
+            ]
+        )
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
 
         # Make 01-fetch succeed
@@ -1522,23 +1550,31 @@ class BranchStepTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             result = run_command(
-                "python3", str(INIT_SCRIPT), "branch-val-wf", "--path", str(tmp), "--steps", "fetch",
+                "python3",
+                str(INIT_SCRIPT),
+                "branch-val-wf",
+                "--path",
+                str(tmp),
+                "--steps",
+                "fetch",
             )
             workflow_dir = tmp / "branch-val-wf"
             manifest_path = workflow_dir / "workflow.json"
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            manifest["steps"].append({
-                "id": "bad-branch",
-                "name": "Bad branch",
-                "type": "branch",
-                # missing 'condition', 'on_true', 'on_false'
-                "success_gate": "",
-                "gate_type": "artifact",
-                "requires_approval": False,
-                "retry_limit": 0,
-                "timeout_seconds": 10,
-                "depends_on": [],
-            })
+            manifest["steps"].append(
+                {
+                    "id": "bad-branch",
+                    "name": "Bad branch",
+                    "type": "branch",
+                    # missing 'condition', 'on_true', 'on_false'
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 10,
+                    "depends_on": [],
+                }
+            )
             manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
             result = run_command("python3", str(RUN_SCRIPT), str(workflow_dir), "--list")
             self.assertNotEqual(result.returncode, 0)
@@ -1550,35 +1586,47 @@ class TriggerTests(unittest.TestCase):
 
     def test_triggers_schema_valid(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
 
         manifest = {
-            "schema_version": 4, "workflow_name": "trig-wf", "version": 1,
-            "goal": "test", "policy_pack": "strict-prod",
-            "graph": {"execution_model": "dag"}, "steps": [],
+            "schema_version": 4,
+            "workflow_name": "trig-wf",
+            "version": 1,
+            "goal": "test",
+            "policy_pack": "strict-prod",
+            "graph": {"execution_model": "dag"},
+            "steps": [],
             "triggers": [
                 {"type": "schedule", "cron": "0 9 * * 1-5"},
                 {"type": "webhook", "port": 9090},
             ],
         }
         from pathlib import Path as P  # noqa: PLC0415, N814
+
         issues = validate_manifest(manifest, P("/fake/workflow.json"))
         errors = [i for i in issues if i.severity == "error" and "trigger" in i.message.lower()]
         self.assertEqual(errors, [], [i.message for i in errors])
 
     def test_triggers_schema_invalid_type(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
 
         manifest = {
-            "schema_version": 4, "workflow_name": "bad-trig", "version": 1,
-            "goal": "test", "policy_pack": "strict-prod",
-            "graph": {"execution_model": "dag"}, "steps": [],
+            "schema_version": 4,
+            "workflow_name": "bad-trig",
+            "version": 1,
+            "goal": "test",
+            "policy_pack": "strict-prod",
+            "graph": {"execution_model": "dag"},
+            "steps": [],
             "triggers": [{"type": "unknown-type"}],
         }
         from pathlib import Path as P  # noqa: PLC0415, N814
+
         issues = validate_manifest(manifest, P("/fake/workflow.json"))
         errors = [i for i in issues if i.severity == "error"]
         self.assertTrue(any("trigger" in i.message.lower() for i in errors))
@@ -1587,6 +1635,7 @@ class TriggerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             import sys  # noqa: PLC0415
+
             sys.path.insert(0, str(SKILL_DIR / "scripts"))
             from schedule_workflow import (
                 install_webhook_trigger,  # type: ignore[import]  # noqa: PLC0415
@@ -1609,11 +1658,18 @@ class NewStepTypeTests(unittest.TestCase):
 
     def _base_step(self, step_id: str, step_type: str, extra: dict | None = None) -> dict:
         s = {
-            "id": step_id, "name": step_id, "type": step_type,
-            "success_gate": "", "gate_type": "artifact",
-            "requires_approval": False, "retry_limit": 0,
-            "timeout_seconds": 30, "depends_on": [],
-            "produces": [], "consumes": [], "validation_checks": [],
+            "id": step_id,
+            "name": step_id,
+            "type": step_type,
+            "success_gate": "",
+            "gate_type": "artifact",
+            "requires_approval": False,
+            "retry_limit": 0,
+            "timeout_seconds": 30,
+            "depends_on": [],
+            "produces": [],
+            "consumes": [],
+            "validation_checks": [],
         }
         if extra:
             s.update(extra)
@@ -1626,7 +1682,9 @@ class NewStepTypeTests(unittest.TestCase):
         mp = wf / "workflow.json"
         m = json.loads(mp.read_text())
         for s in m["steps"]:
-            s["produces"] = []; s["consumes"] = []; s["validation_checks"] = []
+            s["produces"] = []
+            s["consumes"] = []
+            s["validation_checks"] = []
         m["steps"].extend(steps)
         mp.write_text(json.dumps(m, indent=2) + "\n")
         # Make fetch succeed
@@ -1638,23 +1696,36 @@ class NewStepTypeTests(unittest.TestCase):
     def test_http_step_calls_url_and_writes_artifact(self) -> None:
         import http.server  # noqa: E401, PLC0415
         import threading
+
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                self.send_response(200); self.end_headers()
+                self.send_response(200)
+                self.end_headers()
                 self.wfile.write(b'{"ok":true}')
-            def log_message(self, *a): pass
+
+            def log_message(self, *a):
+                pass
+
         srv = http.server.HTTPServer(("127.0.0.1", 0), H)
         port = srv.server_address[1]
         t = threading.Thread(target=srv.handle_request)
         t.start()
         with tempfile.TemporaryDirectory() as tmp:
-            wf = self._scaffold(Path(tmp), "http-wf", [
-                self._base_step("call-api", "http", {
-                    "url": f"http://127.0.0.1:{port}/",
-                    "method": "GET",
-                    "depends_on": ["01-fetch"],
-                })
-            ])
+            wf = self._scaffold(
+                Path(tmp),
+                "http-wf",
+                [
+                    self._base_step(
+                        "call-api",
+                        "http",
+                        {
+                            "url": f"http://127.0.0.1:{port}/",
+                            "method": "GET",
+                            "depends_on": ["01-fetch"],
+                        },
+                    )
+                ],
+            )
             result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
             t.join(timeout=5)
             srv.server_close()
@@ -1667,21 +1738,34 @@ class NewStepTypeTests(unittest.TestCase):
     def test_http_step_fails_on_4xx_by_default(self) -> None:
         import http.server  # noqa: E401, PLC0415
         import threading
+
         class H(http.server.BaseHTTPRequestHandler):
             def do_GET(self):
-                self.send_response(404); self.end_headers()
-            def log_message(self, *a): pass
+                self.send_response(404)
+                self.end_headers()
+
+            def log_message(self, *a):
+                pass
+
         srv = http.server.HTTPServer(("127.0.0.1", 0), H)
         port = srv.server_address[1]
         t = threading.Thread(target=srv.handle_request)
         t.start()
         with tempfile.TemporaryDirectory() as tmp:
-            wf = self._scaffold(Path(tmp), "http-fail-wf", [
-                self._base_step("call-404", "http", {
-                    "url": f"http://127.0.0.1:{port}/",
-                    "depends_on": ["01-fetch"],
-                })
-            ])
+            wf = self._scaffold(
+                Path(tmp),
+                "http-fail-wf",
+                [
+                    self._base_step(
+                        "call-404",
+                        "http",
+                        {
+                            "url": f"http://127.0.0.1:{port}/",
+                            "depends_on": ["01-fetch"],
+                        },
+                    )
+                ],
+            )
             result = run_command("python3", str(self.RUN_SCRIPT), str(wf), "--step", "call-404")
             t.join(timeout=5)
             srv.server_close()
@@ -1691,23 +1775,41 @@ class NewStepTypeTests(unittest.TestCase):
     def test_switch_step_skips_non_matching_cases(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            wf = self._scaffold(root, "switch-wf", [
-                self._base_step("decide", "switch", {
-                    "expression": "{{env:DEPLOY_ENV}}",
-                    "cases": [
-                        {"value": "prod",    "steps": ["deploy-prod"]},
-                        {"value": "staging", "steps": ["deploy-staging"]},
-                    ],
-                    "default": ["deploy-staging"],
-                    "depends_on": ["01-fetch"],
-                }),
-                self._base_step("deploy-prod",    "shell", {"script": "steps/deploy-prod.sh",    "depends_on": ["decide"]}),
-                self._base_step("deploy-staging", "shell", {"script": "steps/deploy-staging.sh", "depends_on": ["decide"]}),
-            ])
+            wf = self._scaffold(
+                root,
+                "switch-wf",
+                [
+                    self._base_step(
+                        "decide",
+                        "switch",
+                        {
+                            "expression": "{{env:DEPLOY_ENV}}",
+                            "cases": [
+                                {"value": "prod", "steps": ["deploy-prod"]},
+                                {"value": "staging", "steps": ["deploy-staging"]},
+                            ],
+                            "default": ["deploy-staging"],
+                            "depends_on": ["01-fetch"],
+                        },
+                    ),
+                    self._base_step(
+                        "deploy-prod",
+                        "shell",
+                        {"script": "steps/deploy-prod.sh", "depends_on": ["decide"]},
+                    ),
+                    self._base_step(
+                        "deploy-staging",
+                        "shell",
+                        {"script": "steps/deploy-staging.sh", "depends_on": ["decide"]},
+                    ),
+                ],
+            )
             for name in ("deploy-prod", "deploy-staging"):
                 s = wf / "steps" / f"{name}.sh"
-                s.write_text(f"#!/usr/bin/env bash\necho {name}\n"); s.chmod(0o755)
-            env = dict(os.environ); env["DEPLOY_ENV"] = "prod"
+                s.write_text(f"#!/usr/bin/env bash\necho {name}\n")
+                s.chmod(0o755)
+            env = dict(os.environ)
+            env["DEPLOY_ENV"] = "prod"
             result = run_command("python3", str(self.RUN_SCRIPT), str(wf), env=env)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             state = (wf / "state" / "step-status.tsv").read_text()
@@ -1718,17 +1820,26 @@ class NewStepTypeTests(unittest.TestCase):
     def test_loop_step_iterates_over_json_array(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            wf = self._scaffold(root, "loop-wf", [
-                self._base_step("process-items", "loop", {
-                    "items_from": "items-list",
-                    "script": "steps/process-item.sh",
-                    "depends_on": ["01-fetch"],
-                })
-            ])
+            wf = self._scaffold(
+                root,
+                "loop-wf",
+                [
+                    self._base_step(
+                        "process-items",
+                        "loop",
+                        {
+                            "items_from": "items-list",
+                            "script": "steps/process-item.sh",
+                            "depends_on": ["01-fetch"],
+                        },
+                    )
+                ],
+            )
             (wf / "artifacts").mkdir(exist_ok=True)
             (wf / "artifacts" / "items-list.json").write_text('["apple","banana","cherry"]')
             proc_sh = wf / "steps" / "process-item.sh"
-            proc_sh.write_text("#!/usr/bin/env bash\necho \"processing: $LOOP_ITEM\"\n"); proc_sh.chmod(0o755)
+            proc_sh.write_text('#!/usr/bin/env bash\necho "processing: $LOOP_ITEM"\n')
+            proc_sh.chmod(0o755)
             result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             out = json.loads((wf / "artifacts" / "process-items.json").read_text())
@@ -1738,9 +1849,11 @@ class NewStepTypeTests(unittest.TestCase):
     # ── wait ──────────────────────────────────────────────────────────────────
     def test_wait_step_sleeps_for_duration(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            wf = self._scaffold(Path(tmp), "wait-wf", [
-                self._base_step("pause", "wait", {"seconds": 0.1, "depends_on": ["01-fetch"]})
-            ])
+            wf = self._scaffold(
+                Path(tmp),
+                "wait-wf",
+                [self._base_step("pause", "wait", {"seconds": 0.1, "depends_on": ["01-fetch"]})],
+            )
             result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             state = (wf / "state" / "step-status.tsv").read_text()
@@ -1749,16 +1862,24 @@ class NewStepTypeTests(unittest.TestCase):
     # ── merge ─────────────────────────────────────────────────────────────────
     def test_merge_step_concatenates_json_arrays(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
-            wf = self._scaffold(Path(tmp), "merge-wf", [
-                self._base_step("combine", "merge", {
-                    "inputs": ["part-a", "part-b"],
-                    "mode": "concat",
-                    "depends_on": ["01-fetch"],
-                })
-            ])
+            wf = self._scaffold(
+                Path(tmp),
+                "merge-wf",
+                [
+                    self._base_step(
+                        "combine",
+                        "merge",
+                        {
+                            "inputs": ["part-a", "part-b"],
+                            "mode": "concat",
+                            "depends_on": ["01-fetch"],
+                        },
+                    )
+                ],
+            )
             (wf / "artifacts").mkdir(exist_ok=True)
-            (wf / "artifacts" / "part-a.json").write_text('[1, 2]')
-            (wf / "artifacts" / "part-b.json").write_text('[3, 4]')
+            (wf / "artifacts" / "part-a.json").write_text("[1, 2]")
+            (wf / "artifacts" / "part-b.json").write_text("[3, 4]")
             result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             out = json.loads((wf / "artifacts" / "combine.json").read_text())
@@ -1769,23 +1890,35 @@ class NewStepTypeTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             # Create the sub-workflow
-            run_command("python3", str(INIT_SCRIPT), "sub-wf", "--path", str(root), "--steps", "work")
+            run_command(
+                "python3", str(INIT_SCRIPT), "sub-wf", "--path", str(root), "--steps", "work"
+            )
             sub_wf = root / "sub-wf"
             sm = sub_wf / "workflow.json"
             sm_data = json.loads(sm.read_text())
             for s in sm_data["steps"]:
-                s["produces"] = []; s["consumes"] = []; s["validation_checks"] = []
+                s["produces"] = []
+                s["consumes"] = []
+                s["validation_checks"] = []
             sm.write_text(json.dumps(sm_data, indent=2) + "\n")
             (sub_wf / "steps" / "01-work.sh").write_text("#!/usr/bin/env bash\necho sub-done\n")
             (sub_wf / "steps" / "01-work.sh").chmod(0o755)
 
             # Parent workflow with a workflow step
-            wf = self._scaffold(root, "parent-wf", [
-                self._base_step("run-sub", "workflow", {
-                    "workflow_dir": str(sub_wf),
-                    "depends_on": ["01-fetch"],
-                })
-            ])
+            wf = self._scaffold(
+                root,
+                "parent-wf",
+                [
+                    self._base_step(
+                        "run-sub",
+                        "workflow",
+                        {
+                            "workflow_dir": str(sub_wf),
+                            "depends_on": ["01-fetch"],
+                        },
+                    )
+                ],
+            )
             result = run_command("python3", str(self.RUN_SCRIPT), str(wf))
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             state = (wf / "state" / "step-status.tsv").read_text()
@@ -1799,6 +1932,7 @@ class DashboardTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             import sys  # noqa: PLC0415
+
             sys.path.insert(0, str(SKILL_DIR / "scripts"))
             from dashboard import (  # type: ignore[import]  # noqa: PLC0415
                 generate_dashboard_html,
@@ -1829,6 +1963,7 @@ class DashboardTests(unittest.TestCase):
 
     def test_dashboard_empty_runs_shows_fallback(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from dashboard import generate_dashboard_html  # type: ignore[import]  # noqa: PLC0415
 
@@ -1846,11 +1981,18 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def _base_step(self, step_id: str, step_type: str, extra: dict | None = None) -> dict:
         s = {
-            "id": step_id, "name": step_id, "type": step_type,
-            "success_gate": "", "gate_type": "artifact",
-            "requires_approval": False, "retry_limit": 0,
-            "timeout_seconds": 30, "depends_on": [],
-            "produces": [], "consumes": [], "validation_checks": [],
+            "id": step_id,
+            "name": step_id,
+            "type": step_type,
+            "success_gate": "",
+            "gate_type": "artifact",
+            "requires_approval": False,
+            "retry_limit": 0,
+            "timeout_seconds": 30,
+            "depends_on": [],
+            "produces": [],
+            "consumes": [],
+            "validation_checks": [],
         }
         if extra:
             s.update(extra)
@@ -1858,6 +2000,7 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def test_discover_finds_skills_in_custom_path(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from discover_skills import discover  # type: ignore[import]  # noqa: PLC0415
 
@@ -1877,6 +2020,7 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def test_discover_deduplicates_by_name(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from discover_skills import discover  # type: ignore[import]  # noqa: PLC0415
 
@@ -1895,17 +2039,27 @@ class SkillDiscoveryTests(unittest.TestCase):
     def test_skill_step_not_found_fails_gracefully(self) -> None:
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
-            run_command("python3", str(INIT_SCRIPT), "skill-wf", "--path", str(root), "--steps", "fetch")
+            run_command(
+                "python3", str(INIT_SCRIPT), "skill-wf", "--path", str(root), "--steps", "fetch"
+            )
             wf = root / "skill-wf"
             mp = wf / "workflow.json"
             m = json.loads(mp.read_text())
             for s in m["steps"]:
-                s["produces"] = []; s["consumes"] = []; s["validation_checks"] = []
-            m["steps"].append(self._base_step("run-skill", "skill", {
-                "skill": "nonexistent-skill-xyz",
-                "instruction": "do something",
-                "depends_on": ["01-fetch"],
-            }))
+                s["produces"] = []
+                s["consumes"] = []
+                s["validation_checks"] = []
+            m["steps"].append(
+                self._base_step(
+                    "run-skill",
+                    "skill",
+                    {
+                        "skill": "nonexistent-skill-xyz",
+                        "instruction": "do something",
+                        "depends_on": ["01-fetch"],
+                    },
+                )
+            )
             mp.write_text(json.dumps(m, indent=2) + "\n")
             (wf / "steps" / "01-fetch.sh").write_text("#!/usr/bin/env bash\necho ok\n")
             (wf / "steps" / "01-fetch.sh").chmod(0o755)
@@ -1921,21 +2075,32 @@ class SkillDiscoveryTests(unittest.TestCase):
 
     def test_skill_validation_requires_skill_name(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from pathlib import Path as P  # noqa: PLC0415, N814
 
         from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
 
         manifest = {
-            "schema_version": 4, "workflow_name": "sk-val", "version": 1,
-            "goal": "test", "policy_pack": "strict-prod",
+            "schema_version": 4,
+            "workflow_name": "sk-val",
+            "version": 1,
+            "goal": "test",
+            "policy_pack": "strict-prod",
             "graph": {"execution_model": "dag"},
-            "steps": [{
-                "id": "bad-skill", "name": "bad", "type": "skill",
-                # missing "skill" field
-                "success_gate": "", "gate_type": "artifact",
-                "requires_approval": False, "retry_limit": 0, "timeout_seconds": 30,
-            }],
+            "steps": [
+                {
+                    "id": "bad-skill",
+                    "name": "bad",
+                    "type": "skill",
+                    # missing "skill" field
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 30,
+                }
+            ],
         }
         issues = validate_manifest(manifest, P("/fake/workflow.json"))
         errors = [i for i in issues if i.severity == "error"]
@@ -1954,26 +2119,29 @@ class BrowserAndComputerUseTests(unittest.TestCase):
         manifest_path = wf / "workflow.json"
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         # Replace the generated step with our step type
-        manifest["steps"] = [{
-            "id": "step1",
-            "name": "Step 1",
-            "type": step_type,
-            "instruction": "Take a screenshot and describe what you see.",
-            "success_gate": "",
-            "gate_type": "artifact",
-            "requires_approval": False,
-            "retry_limit": 0,
-            "timeout_seconds": 30,
-            "produces": [],
-            "consumes": [],
-            "validation_checks": [],
-        }]
+        manifest["steps"] = [
+            {
+                "id": "step1",
+                "name": "Step 1",
+                "type": step_type,
+                "instruction": "Take a screenshot and describe what you see.",
+                "success_gate": "",
+                "gate_type": "artifact",
+                "requires_approval": False,
+                "retry_limit": 0,
+                "timeout_seconds": 30,
+                "produces": [],
+                "consumes": [],
+                "validation_checks": [],
+            }
+        ]
         manifest_path.write_text(json.dumps(manifest, indent=2))
         return wf
 
     def test_browser_step_fails_without_claude(self) -> None:
         import sys as _sys  # noqa: PLC0415
         import tempfile  # noqa: PLC0415
+
         with tempfile.TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             wf = self._make_workflow("browser", tmp)
@@ -1982,7 +2150,9 @@ class BrowserAndComputerUseTests(unittest.TestCase):
             env["PATH"] = str(tmp) + ":/usr/bin:/bin"
             result = subprocess.run(
                 [_sys.executable, str(self.RUN_SCRIPT), str(wf), "--step", "step1"],
-                capture_output=True, text=True, env=env,
+                capture_output=True,
+                text=True,
+                env=env,
             )
             self.assertNotEqual(result.returncode, 0)
             log = (wf / "logs" / "step1.log").read_text()
@@ -1991,6 +2161,7 @@ class BrowserAndComputerUseTests(unittest.TestCase):
     def test_computer_use_step_fails_without_claude(self) -> None:
         import sys as _sys  # noqa: PLC0415
         import tempfile  # noqa: PLC0415
+
         with tempfile.TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             wf = self._make_workflow("computer-use", tmp)
@@ -1998,7 +2169,9 @@ class BrowserAndComputerUseTests(unittest.TestCase):
             env["PATH"] = str(tmp) + ":/usr/bin:/bin"
             result = subprocess.run(
                 [_sys.executable, str(self.RUN_SCRIPT), str(wf), "--step", "step1"],
-                capture_output=True, text=True, env=env,
+                capture_output=True,
+                text=True,
+                env=env,
             )
             self.assertNotEqual(result.returncode, 0)
             log = (wf / "logs" / "step1.log").read_text()
@@ -2006,20 +2179,31 @@ class BrowserAndComputerUseTests(unittest.TestCase):
 
     def test_browser_schema_requires_instruction(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from pathlib import Path as P  # noqa: PLC0415, N814
 
         from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
 
         manifest = {
-            "schema_version": 4, "workflow_name": "b-val", "version": 1,
-            "goal": "test", "policy_pack": "strict-prod",
-            "steps": [{
-                "id": "b1", "name": "b1", "type": "browser",
-                # missing instruction
-                "success_gate": "", "gate_type": "artifact",
-                "requires_approval": False, "retry_limit": 0, "timeout_seconds": 30,
-            }],
+            "schema_version": 4,
+            "workflow_name": "b-val",
+            "version": 1,
+            "goal": "test",
+            "policy_pack": "strict-prod",
+            "steps": [
+                {
+                    "id": "b1",
+                    "name": "b1",
+                    "type": "browser",
+                    # missing instruction
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 30,
+                }
+            ],
         }
         issues = validate_manifest(manifest, P("/fake/workflow.json"))
         errors = [i for i in issues if i.severity == "error"]
@@ -2027,20 +2211,31 @@ class BrowserAndComputerUseTests(unittest.TestCase):
 
     def test_computer_use_schema_requires_instruction(self) -> None:
         import sys  # noqa: PLC0415
+
         sys.path.insert(0, str(SKILL_DIR / "scripts"))
         from pathlib import Path as P  # noqa: PLC0415, N814
 
         from workflow_schema import validate_manifest  # type: ignore[import]  # noqa: PLC0415
 
         manifest = {
-            "schema_version": 4, "workflow_name": "cu-val", "version": 1,
-            "goal": "test", "policy_pack": "strict-prod",
-            "steps": [{
-                "id": "cu1", "name": "cu1", "type": "computer-use",
-                # missing instruction
-                "success_gate": "", "gate_type": "artifact",
-                "requires_approval": False, "retry_limit": 0, "timeout_seconds": 30,
-            }],
+            "schema_version": 4,
+            "workflow_name": "cu-val",
+            "version": 1,
+            "goal": "test",
+            "policy_pack": "strict-prod",
+            "steps": [
+                {
+                    "id": "cu1",
+                    "name": "cu1",
+                    "type": "computer-use",
+                    # missing instruction
+                    "success_gate": "",
+                    "gate_type": "artifact",
+                    "requires_approval": False,
+                    "retry_limit": 0,
+                    "timeout_seconds": 30,
+                }
+            ],
         }
         issues = validate_manifest(manifest, P("/fake/workflow.json"))
         errors = [i for i in issues if i.severity == "error"]
@@ -2049,6 +2244,7 @@ class BrowserAndComputerUseTests(unittest.TestCase):
     def test_browser_step_with_fake_claude(self) -> None:
         import sys as _sys  # noqa: PLC0415
         import tempfile  # noqa: PLC0415
+
         with tempfile.TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             wf = self._make_workflow("browser", tmp)
@@ -2059,7 +2255,9 @@ class BrowserAndComputerUseTests(unittest.TestCase):
             env["PATH"] = str(tmp) + ":" + env.get("PATH", "")
             result = subprocess.run(
                 [_sys.executable, str(self.RUN_SCRIPT), str(wf), "--step", "step1"],
-                capture_output=True, text=True, env=env,
+                capture_output=True,
+                text=True,
+                env=env,
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             artifact = (wf / "artifacts" / "step1.out").read_text()
@@ -2074,6 +2272,7 @@ class N8nImportTests(unittest.TestCase):
 
     def _load_importer(self):
         import importlib.util  # noqa: PLC0415
+
         spec = importlib.util.spec_from_file_location("import_n8n", self.IMPORT_SCRIPT)
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
@@ -2133,13 +2332,15 @@ class N8nImportTests(unittest.TestCase):
     def test_triggers_extracted(self) -> None:
         mod = self._load_importer()
         export = self._minimal_n8n()
-        export["nodes"].append({
-            "id": "t1",
-            "name": "Cron",
-            "type": "n8n-nodes-base.cron",
-            "parameters": {"rule": {"interval": [{"field": "hours", "hoursInterval": 2}]}},
-            "position": [0, 0],
-        })
+        export["nodes"].append(
+            {
+                "id": "t1",
+                "name": "Cron",
+                "type": "n8n-nodes-base.cron",
+                "parameters": {"rule": {"interval": [{"field": "hours", "hoursInterval": 2}]}},
+                "position": [0, 0],
+            }
+        )
         manifest, _ = mod.convert(export)
         triggers = manifest.get("triggers", [])
         self.assertEqual(len(triggers), 1)
@@ -2150,13 +2351,15 @@ class N8nImportTests(unittest.TestCase):
         mod = self._load_importer()
         export = {
             "name": "Slack Notifier",
-            "nodes": [{
-                "id": "s1",
-                "name": "Send Slack",
-                "type": "n8n-nodes-base.slack",
-                "parameters": {"resource": "message", "operation": "post"},
-                "position": [0, 0],
-            }],
+            "nodes": [
+                {
+                    "id": "s1",
+                    "name": "Send Slack",
+                    "type": "n8n-nodes-base.slack",
+                    "parameters": {"resource": "message", "operation": "post"},
+                    "position": [0, 0],
+                }
+            ],
             "connections": {},
         }
         _, proposals = mod.convert(export)
@@ -2190,15 +2393,19 @@ class N8nImportTests(unittest.TestCase):
 
     def test_cli_import_n8n_flag(self) -> None:
         import tempfile  # noqa: PLC0415
+
         with tempfile.TemporaryDirectory() as tmp_str:
             tmp = Path(tmp_str)
             export_file = tmp / "export.json"
             export_file.write_text(json.dumps(self._minimal_n8n()), encoding="utf-8")
             out_dir = tmp / "imported"
             result = run_command(
-                "python3", str(self.RUN_SCRIPT),
-                "--import-n8n", str(export_file),
-                "--output-dir", str(out_dir),
+                "python3",
+                str(self.RUN_SCRIPT),
+                "--import-n8n",
+                str(export_file),
+                "--output-dir",
+                str(out_dir),
             )
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((out_dir / "workflow.json").exists())
@@ -2212,31 +2419,37 @@ class SecurityFixTests(unittest.TestCase):
 
     def _load_importer(self):
         import sys  # noqa: PLC0415
+
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
 
         import import_n8n  # noqa: PLC0415
+
         importlib.reload(import_n8n)
         return import_n8n
 
     def _load_runner(self):
         import sys  # noqa: PLC0415
+
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
 
         import run_workflow  # noqa: PLC0415
+
         importlib.reload(run_workflow)
         return run_workflow
 
     def _load_schedule(self):
         import sys  # noqa: PLC0415
+
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
 
         import schedule_workflow  # noqa: PLC0415
+
         importlib.reload(schedule_workflow)
         return schedule_workflow
 
@@ -2248,14 +2461,22 @@ class SecurityFixTests(unittest.TestCase):
         n8n = {
             "name": "Dep Test",
             "nodes": [
-                {"id": "a", "name": "A", "type": "n8n-nodes-base.executeCommand",
-                 "parameters": {"command": "echo a"}, "position": [0, 0]},
-                {"id": "b", "name": "B", "type": "n8n-nodes-base.executeCommand",
-                 "parameters": {"command": "echo b"}, "position": [100, 0]},
+                {
+                    "id": "a",
+                    "name": "A",
+                    "type": "n8n-nodes-base.executeCommand",
+                    "parameters": {"command": "echo a"},
+                    "position": [0, 0],
+                },
+                {
+                    "id": "b",
+                    "name": "B",
+                    "type": "n8n-nodes-base.executeCommand",
+                    "parameters": {"command": "echo b"},
+                    "position": [100, 0],
+                },
             ],
-            "connections": {
-                "A": {"main": [[{"node": "B", "type": "main", "index": 0}]]}
-            },
+            "connections": {"A": {"main": [[{"node": "B", "type": "main", "index": 0}]]}},
         }
         manifest, _ = mod.convert(n8n)
         steps_by_id = {s["id"]: s for s in manifest["steps"]}
@@ -2268,13 +2489,19 @@ class SecurityFixTests(unittest.TestCase):
     def test_importer_proposals_wrapped_in_envelope(self) -> None:
         """Mutation file must be {"mutations": [...]} not a bare list."""
         import tempfile  # noqa: PLC0415
+
         mod = self._load_importer()
         n8n = {
             "name": "Slack Envelope",
-            "nodes": [{"id": "s1", "name": "Send Slack",
-                        "type": "n8n-nodes-base.slack",
-                        "parameters": {"resource": "message", "operation": "post"},
-                        "position": [0, 0]}],
+            "nodes": [
+                {
+                    "id": "s1",
+                    "name": "Send Slack",
+                    "type": "n8n-nodes-base.slack",
+                    "parameters": {"resource": "message", "operation": "post"},
+                    "position": [0, 0],
+                }
+            ],
             "connections": {},
         }
         with tempfile.TemporaryDirectory() as tmp_str:
@@ -2283,9 +2510,7 @@ class SecurityFixTests(unittest.TestCase):
             state_dir.mkdir()
             mutations_path = state_dir / "proposed-mutations.json"
             # Pre-populate with envelope format
-            mutations_path.write_text(
-                json.dumps({"mutations": []}, indent=2), encoding="utf-8"
-            )
+            mutations_path.write_text(json.dumps({"mutations": []}, indent=2), encoding="utf-8")
             _, proposals = mod.convert(n8n)
             # Simulate what the CLI does: write proposals using the envelope
             data = json.loads(mutations_path.read_text(encoding="utf-8"))
@@ -2307,22 +2532,39 @@ class SecurityFixTests(unittest.TestCase):
         n8n = {
             "name": "Branch Test",
             "nodes": [
-                {"id": "if1", "name": "Check",
-                 "type": "n8n-nodes-base.if",
-                 "parameters": {"conditions": {"string": [{"value1": "={{$json.x}}", "operation": "equal", "value2": "ok"}]}},
-                 "position": [0, 0]},
-                {"id": "ok_node", "name": "OkStep",
-                 "type": "n8n-nodes-base.executeCommand",
-                 "parameters": {"command": "echo ok"}, "position": [200, -100]},
-                {"id": "fail_node", "name": "FailStep",
-                 "type": "n8n-nodes-base.executeCommand",
-                 "parameters": {"command": "echo fail"}, "position": [200, 100]},
+                {
+                    "id": "if1",
+                    "name": "Check",
+                    "type": "n8n-nodes-base.if",
+                    "parameters": {
+                        "conditions": {
+                            "string": [
+                                {"value1": "={{$json.x}}", "operation": "equal", "value2": "ok"}
+                            ]
+                        }
+                    },
+                    "position": [0, 0],
+                },
+                {
+                    "id": "ok_node",
+                    "name": "OkStep",
+                    "type": "n8n-nodes-base.executeCommand",
+                    "parameters": {"command": "echo ok"},
+                    "position": [200, -100],
+                },
+                {
+                    "id": "fail_node",
+                    "name": "FailStep",
+                    "type": "n8n-nodes-base.executeCommand",
+                    "parameters": {"command": "echo fail"},
+                    "position": [200, 100],
+                },
             ],
             "connections": {
                 "Check": {
                     "main": [
-                        [{"node": "OkStep", "type": "main", "index": 0}],   # output[0] = true
-                        [{"node": "FailStep", "type": "main", "index": 0}], # output[1] = false
+                        [{"node": "OkStep", "type": "main", "index": 0}],  # output[0] = true
+                        [{"node": "FailStep", "type": "main", "index": 0}],  # output[1] = false
                     ]
                 }
             },
@@ -2341,23 +2583,36 @@ class SecurityFixTests(unittest.TestCase):
         n8n = {
             "name": "Switch Test",
             "nodes": [
-                {"id": "sw1", "name": "Route",
-                 "type": "n8n-nodes-base.switch",
-                 "parameters": {
-                     "dataType": "string",
-                     "value1": "={{$json.env}}",
-                     "rules": {"rules": [
-                         {"operation": "equal", "value2": "prod", "outputKey": "prod"},
-                         {"operation": "equal", "value2": "dev", "outputKey": "dev"},
-                     ]},
-                 },
-                 "position": [0, 0]},
-                {"id": "prod_node", "name": "ProdStep",
-                 "type": "n8n-nodes-base.executeCommand",
-                 "parameters": {"command": "echo prod"}, "position": [200, -100]},
-                {"id": "dev_node", "name": "DevStep",
-                 "type": "n8n-nodes-base.executeCommand",
-                 "parameters": {"command": "echo dev"}, "position": [200, 100]},
+                {
+                    "id": "sw1",
+                    "name": "Route",
+                    "type": "n8n-nodes-base.switch",
+                    "parameters": {
+                        "dataType": "string",
+                        "value1": "={{$json.env}}",
+                        "rules": {
+                            "rules": [
+                                {"operation": "equal", "value2": "prod", "outputKey": "prod"},
+                                {"operation": "equal", "value2": "dev", "outputKey": "dev"},
+                            ]
+                        },
+                    },
+                    "position": [0, 0],
+                },
+                {
+                    "id": "prod_node",
+                    "name": "ProdStep",
+                    "type": "n8n-nodes-base.executeCommand",
+                    "parameters": {"command": "echo prod"},
+                    "position": [200, -100],
+                },
+                {
+                    "id": "dev_node",
+                    "name": "DevStep",
+                    "type": "n8n-nodes-base.executeCommand",
+                    "parameters": {"command": "echo dev"},
+                    "position": [200, 100],
+                },
             ],
             "connections": {
                 "Route": {
@@ -2505,11 +2760,13 @@ class MutationClassifierTests(unittest.TestCase):
 
     def _load_mc(self):
         import sys  # noqa: PLC0415
+
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
 
         import mutation_classifier  # noqa: PLC0415
+
         importlib.reload(mutation_classifier)
         return mutation_classifier
 
@@ -2531,26 +2788,32 @@ class MutationClassifierTests(unittest.TestCase):
 
     def test_modify_step_script_is_high(self) -> None:
         mc = self._load_mc()
-        risk = mc.classify_risk({
-            "type": "modify_step",
-            "payload": {"step_id": "x", "changes": {"script": "new.sh"}},
-        })
+        risk = mc.classify_risk(
+            {
+                "type": "modify_step",
+                "payload": {"step_id": "x", "changes": {"script": "new.sh"}},
+            }
+        )
         self.assertEqual(risk, "high")
 
     def test_modify_step_timeout_is_low(self) -> None:
         mc = self._load_mc()
-        risk = mc.classify_risk({
-            "type": "modify_step",
-            "payload": {"step_id": "x", "changes": {"timeout_seconds": 120}},
-        })
+        risk = mc.classify_risk(
+            {
+                "type": "modify_step",
+                "payload": {"step_id": "x", "changes": {"timeout_seconds": 120}},
+            }
+        )
         self.assertEqual(risk, "low")
 
     def test_modify_step_url_is_medium(self) -> None:
         mc = self._load_mc()
-        risk = mc.classify_risk({
-            "type": "modify_step",
-            "payload": {"step_id": "x", "changes": {"url": "https://new.example.com"}},
-        })
+        risk = mc.classify_risk(
+            {
+                "type": "modify_step",
+                "payload": {"step_id": "x", "changes": {"url": "https://new.example.com"}},
+            }
+        )
         self.assertEqual(risk, "medium")
 
     def test_risk_at_most_low_accepts_low(self) -> None:
@@ -2586,11 +2849,19 @@ class MutationClassifierTests(unittest.TestCase):
             run1.mkdir()
             events = [
                 {"event": "step_started", "step_id": "fetch", "timestamp": "2026-01-01T00:00:00Z"},
-                {"event": "step_failed", "step_id": "fetch", "duration_seconds": 1.2,
-                 "timestamp": "2026-01-01T00:00:01Z"},
+                {
+                    "event": "step_failed",
+                    "step_id": "fetch",
+                    "duration_seconds": 1.2,
+                    "timestamp": "2026-01-01T00:00:01Z",
+                },
                 {"event": "step_started", "step_id": "fetch", "timestamp": "2026-01-01T00:00:02Z"},
-                {"event": "step_completed", "step_id": "fetch", "duration_seconds": 0.8,
-                 "timestamp": "2026-01-01T00:00:03Z"},
+                {
+                    "event": "step_completed",
+                    "step_id": "fetch",
+                    "duration_seconds": 0.8,
+                    "timestamp": "2026-01-01T00:00:03Z",
+                },
             ]
             (run1 / "events.jsonl").write_text(
                 "\n".join(json.dumps(e) for e in events), encoding="utf-8"
@@ -2606,19 +2877,34 @@ class MutationClassifierTests(unittest.TestCase):
     def test_improvement_summary_partitions_by_risk(self) -> None:
         mc = self._load_mc()
         mutations = [
-            {"id": "m1", "status": "pending", "type": "add_sidecar",
-             "payload": {}, "description": "add monitoring sidecar"},
-            {"id": "m2", "status": "pending", "type": "remove_step",
-             "payload": {}, "description": "remove old step"},
-            {"id": "m3", "status": "approved", "type": "add_step",
-             "payload": {}, "description": "already approved"},
+            {
+                "id": "m1",
+                "status": "pending",
+                "type": "add_sidecar",
+                "payload": {},
+                "description": "add monitoring sidecar",
+            },
+            {
+                "id": "m2",
+                "status": "pending",
+                "type": "remove_step",
+                "payload": {},
+                "description": "remove old step",
+            },
+            {
+                "id": "m3",
+                "status": "approved",
+                "type": "add_step",
+                "payload": {},
+                "description": "already approved",
+            },
         ]
         summary = mc.improvement_summary(mutations, {}, max_risk="low")
         auto_ids = [m["id"] for m in summary["auto_approvable"]]
         needs_ids = [m["id"] for m in summary["needs_review"]]
-        self.assertIn("m1", auto_ids)      # low risk → auto
-        self.assertIn("m2", needs_ids)     # high risk → needs review
-        self.assertNotIn("m3", auto_ids)   # already approved → excluded
+        self.assertIn("m1", auto_ids)  # low risk → auto
+        self.assertIn("m2", needs_ids)  # high risk → needs review
+        self.assertNotIn("m3", auto_ids)  # already approved → excluded
 
 
 class ParallelAndImprovementTests(unittest.TestCase):
@@ -2629,11 +2915,13 @@ class ParallelAndImprovementTests(unittest.TestCase):
 
     def _load_runner(self):
         import sys  # noqa: PLC0415
+
         if str(self.SCRIPTS_DIR) not in sys.path:
             sys.path.insert(0, str(self.SCRIPTS_DIR))
         import importlib  # noqa: PLC0415
 
         import run_workflow  # noqa: PLC0415
+
         importlib.reload(run_workflow)
         return run_workflow
 
@@ -2643,8 +2931,11 @@ class ParallelAndImprovementTests(unittest.TestCase):
         """max_parallel in manifest graph should be respected when policy omits it."""
         # Access the resolution logic indirectly — same formula as run_workflow.py.
         manifest = {
-            "schema_version": 4, "workflow_name": "p-test", "version": 1,
-            "goal": "test", "policy_pack": "strict-prod",
+            "schema_version": 4,
+            "workflow_name": "p-test",
+            "version": 1,
+            "goal": "test",
+            "policy_pack": "strict-prod",
             "graph": {"execution_model": "dag", "max_parallel": 4},
             "steps": [],
         }
@@ -2674,7 +2965,9 @@ class ParallelAndImprovementTests(unittest.TestCase):
 
     def test_improve_max_risk_flag_parsed(self) -> None:
         rw = self._load_runner()
-        ns = rw.parse_args(["--improve", "--improve-max-risk", "medium", "--workflow-dir", "/tmp/x"])
+        ns = rw.parse_args(
+            ["--improve", "--improve-max-risk", "medium", "--workflow-dir", "/tmp/x"]
+        )
         self.assertTrue(ns.improve)
         self.assertEqual(ns.improve_max_risk, "medium")
 
@@ -2695,7 +2988,9 @@ class ParallelAndImprovementTests(unittest.TestCase):
         rw = self._load_runner()
         with tempfile.TemporaryDirectory() as tmp_str:
             root = Path(tmp_str)
-            run_command("python3", str(INIT_SCRIPT), "improve-wf", "--path", str(root), "--steps", "run")
+            run_command(
+                "python3", str(INIT_SCRIPT), "improve-wf", "--path", str(root), "--steps", "run"
+            )
             wf_dir = root / "improve-wf"
             paths = rw.build_paths(wf_dir)
 
@@ -2713,13 +3008,9 @@ class ParallelAndImprovementTests(unittest.TestCase):
                 "run_id": "",
             }
             paths.mutations_path.parent.mkdir(parents=True, exist_ok=True)
-            paths.mutations_path.write_text(
-                json.dumps({"mutations": [low_mut]}), encoding="utf-8"
-            )
+            paths.mutations_path.write_text(json.dumps({"mutations": [low_mut]}), encoding="utf-8")
 
-            approved = rw.run_improvement_cycle(
-                paths, manifest, {}, max_risk="low", verbose=False
-            )
+            approved = rw.run_improvement_cycle(paths, manifest, {}, max_risk="low", verbose=False)
         self.assertEqual(approved, 1)
 
     def test_improvement_cycle_skips_high_risk_mutations(self) -> None:
@@ -2727,7 +3018,9 @@ class ParallelAndImprovementTests(unittest.TestCase):
         rw = self._load_runner()
         with tempfile.TemporaryDirectory() as tmp_str:
             root = Path(tmp_str)
-            run_command("python3", str(INIT_SCRIPT), "high-risk-wf", "--path", str(root), "--steps", "run")
+            run_command(
+                "python3", str(INIT_SCRIPT), "high-risk-wf", "--path", str(root), "--steps", "run"
+            )
             wf_dir = root / "high-risk-wf"
             paths = rw.build_paths(wf_dir)
 
@@ -2742,25 +3035,26 @@ class ParallelAndImprovementTests(unittest.TestCase):
                 "run_id": "",
             }
             paths.mutations_path.parent.mkdir(parents=True, exist_ok=True)
-            paths.mutations_path.write_text(
-                json.dumps({"mutations": [high_mut]}), encoding="utf-8"
-            )
+            paths.mutations_path.write_text(json.dumps({"mutations": [high_mut]}), encoding="utf-8")
 
             manifest = rw.load_manifest(paths.manifest_path)
-            approved = rw.run_improvement_cycle(
-                paths, manifest, {}, max_risk="low", verbose=False
-            )
+            approved = rw.run_improvement_cycle(paths, manifest, {}, max_risk="low", verbose=False)
         self.assertEqual(approved, 0)
 
     def test_improve_cli_flag_runs_cycle_on_workflow(self) -> None:
         """--improve flag must exit 0 even when there are no pending mutations."""
         with tempfile.TemporaryDirectory() as tmp_str:
             root = Path(tmp_str)
-            run_command("python3", str(INIT_SCRIPT), "cli-improve-wf", "--path", str(root), "--steps", "run")
+            run_command(
+                "python3", str(INIT_SCRIPT), "cli-improve-wf", "--path", str(root), "--steps", "run"
+            )
             wf_dir = root / "cli-improve-wf"
             result = run_command(
-                "python3", str(self.RUN_SCRIPT),
-                "--improve", "--workflow-dir", str(wf_dir),
+                "python3",
+                str(self.RUN_SCRIPT),
+                "--improve",
+                "--workflow-dir",
+                str(wf_dir),
             )
         self.assertEqual(result.returncode, 0, result.stderr)
 

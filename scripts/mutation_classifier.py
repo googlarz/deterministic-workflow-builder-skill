@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """Risk-classify mutation proposals and analyze workflow run history."""
+
 from __future__ import annotations
 
 import json
@@ -63,6 +64,7 @@ def risk_at_most(mutation: dict[str, Any], max_risk: str) -> bool:
 # Run-history analysis
 # ---------------------------------------------------------------------------
 
+
 def _read_events(run_dir: Path) -> list[dict[str, Any]]:
     events_path = run_dir / "events.jsonl"
     if not events_path.exists():
@@ -107,21 +109,15 @@ def analyze_run_history(audit_root: Path) -> dict[str, dict[str, Any]]:
             if not sid:
                 continue
             if etype == "step_started":
-                stats = step_stats.setdefault(
-                    sid, {"runs": 0, "failures": 0, "durations": []}
-                )
+                stats = step_stats.setdefault(sid, {"runs": 0, "failures": 0, "durations": []})
                 stats["runs"] += 1
             elif etype == "step_completed":
-                stats = step_stats.setdefault(
-                    sid, {"runs": 0, "failures": 0, "durations": []}
-                )
+                stats = step_stats.setdefault(sid, {"runs": 0, "failures": 0, "durations": []})
                 dur = ev.get("duration_seconds")
                 if isinstance(dur, (int, float)):
                     stats["durations"].append(float(dur))
             elif etype == "step_failed":
-                stats = step_stats.setdefault(
-                    sid, {"runs": 0, "failures": 0, "durations": []}
-                )
+                stats = step_stats.setdefault(sid, {"runs": 0, "failures": 0, "durations": []})
                 stats["failures"] += 1
 
     # Summarize
@@ -177,9 +173,7 @@ def improvement_summary(
         else:
             needs.append(mut)
 
-    unhealthy = [
-        sid for sid, stats in history.items() if stats.get("failure_rate", 0) > 0.2
-    ]
+    unhealthy = [sid for sid, stats in history.items() if stats.get("failure_rate", 0) > 0.2]
 
     return {
         "auto_approvable": auto,
