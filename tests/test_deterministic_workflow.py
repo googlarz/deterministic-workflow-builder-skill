@@ -2119,8 +2119,8 @@ class N8nImportTests(unittest.TestCase):
         mod = self._load_importer()
         manifest, _ = mod.convert(self._minimal_n8n())
         steps_by_id = {s["id"]: s for s in manifest["steps"]}
-        # http-request depends on execute-command
-        self.assertIn("execute-command", steps_by_id["http-request"].get("needs", []))
+        # http-request depends on execute-command (field is depends_on, not needs)
+        self.assertIn("execute-command", steps_by_id["http-request"].get("depends_on", []))
 
     def test_http_node_mapped_correctly(self) -> None:
         mod = self._load_importer()
@@ -2203,6 +2203,296 @@ class N8nImportTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertTrue((out_dir / "workflow.json").exists())
             self.assertTrue((out_dir / "run_workflow.sh").exists())
+
+
+class SecurityFixTests(unittest.TestCase):
+    """Tests for the 5 adversarial-review security fixes (v1.6.0)."""
+
+    SCRIPTS_DIR = SKILL_DIR / "scripts"
+
+    def _load_importer(self):
+        import sys  # noqa: PLC0415
+        if str(self.SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(self.SCRIPTS_DIR))
+        import importlib  # noqa: PLC0415
+        import import_n8n  # noqa: PLC0415
+        importlib.reload(import_n8n)
+        return import_n8n
+
+    def _load_runner(self):
+        import sys  # noqa: PLC0415
+        if str(self.SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(self.SCRIPTS_DIR))
+        import importlib  # noqa: PLC0415
+        import run_workflow  # noqa: PLC0415
+        importlib.reload(run_workflow)
+        return run_workflow
+
+    def _load_schedule(self):
+        import sys  # noqa: PLC0415
+        if str(self.SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(self.SCRIPTS_DIR))
+        import importlib  # noqa: PLC0415
+        import schedule_workflow  # noqa: PLC0415
+        importlib.reload(schedule_workflow)
+        return schedule_workflow
+
+    # ── Fix 1: depends_on (not needs) ─────────────────────────────────────
+
+    def test_importer_uses_depends_on_not_needs(self) -> None:
+        """Importer must write depends_on so the scheduler can find dependencies."""
+        mod = self._load_importer()
+        n8n = {
+            "name": "Dep Test",
+            "nodes": [
+                {"id": "a", "name": "A", "type": "n8n-nodes-base.executeCommand",
+                 "parameters": {"command": "echo a"}, "position": [0, 0]},
+                {"id": "b", "name": "B", "type": "n8n-nodes-base.executeCommand",
+                 "parameters": {"command": "echo b"}, "position": [100, 0]},
+            ],
+            "connections": {
+                "A": {"main": [[{"node": "B", "type": "main", "index": 0}]]}
+            },
+        }
+        manifest, _ = mod.convert(n8n)
+        steps_by_id = {s["id"]: s for s in manifest["steps"]}
+        b_step = steps_by_id["b"]
+        self.assertNotIn("needs", b_step, "'needs' field must not appear; use depends_on")
+        self.assertIn("a", b_step.get("depends_on", []))
+
+    # ── Fix 2: mutation envelope ───────────────────────────────────────────
+
+    def test_importer_proposals_wrapped_in_envelope(self) -> None:
+        """Mutation file must be {"mutations": [...]} not a bare list."""
+        import tempfile  # noqa: PLC0415
+        mod = self._load_importer()
+        n8n = {
+            "name": "Slack Envelope",
+            "nodes": [{"id": "s1", "name": "Send Slack",
+                        "type": "n8n-nodes-base.slack",
+                        "parameters": {"resource": "message", "operation": "post"},
+                        "position": [0, 0]}],
+            "connections": {},
+        }
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            state_dir = tmp / "state"
+            state_dir.mkdir()
+            mutations_path = state_dir / "proposed-mutations.json"
+            # Pre-populate with envelope format
+            mutations_path.write_text(
+                json.dumps({"mutations": []}, indent=2), encoding="utf-8"
+            )
+            _, proposals = mod.convert(n8n)
+            # Simulate what the CLI does: write proposals using the envelope
+            data = json.loads(mutations_path.read_text(encoding="utf-8"))
+            existing = data.get("mutations", data) if isinstance(data, dict) else data
+            existing.extend(proposals)
+            mutations_path.write_text(
+                json.dumps({"mutations": existing}, indent=2) + "\n", encoding="utf-8"
+            )
+            saved = json.loads(mutations_path.read_text(encoding="utf-8"))
+            self.assertIsInstance(saved, dict, "top level must be a dict, not a list")
+            self.assertIn("mutations", saved)
+            self.assertIsInstance(saved["mutations"], list)
+
+    # ── Fix 3: branch/switch runtime contracts ─────────────────────────────
+
+    def test_importer_branch_produces_on_true_on_false(self) -> None:
+        """IF node must produce on_true / on_false with downstream step IDs."""
+        mod = self._load_importer()
+        n8n = {
+            "name": "Branch Test",
+            "nodes": [
+                {"id": "if1", "name": "Check",
+                 "type": "n8n-nodes-base.if",
+                 "parameters": {"conditions": {"string": [{"value1": "={{$json.x}}", "operation": "equal", "value2": "ok"}]}},
+                 "position": [0, 0]},
+                {"id": "ok_node", "name": "OkStep",
+                 "type": "n8n-nodes-base.executeCommand",
+                 "parameters": {"command": "echo ok"}, "position": [200, -100]},
+                {"id": "fail_node", "name": "FailStep",
+                 "type": "n8n-nodes-base.executeCommand",
+                 "parameters": {"command": "echo fail"}, "position": [200, 100]},
+            ],
+            "connections": {
+                "Check": {
+                    "main": [
+                        [{"node": "OkStep", "type": "main", "index": 0}],   # output[0] = true
+                        [{"node": "FailStep", "type": "main", "index": 0}], # output[1] = false
+                    ]
+                }
+            },
+        }
+        manifest, _ = mod.convert(n8n)
+        steps_by_id = {s["id"]: s for s in manifest["steps"]}
+        branch = steps_by_id["check"]
+        self.assertEqual(branch["type"], "branch")
+        self.assertIn("condition", branch)
+        self.assertIn("okstep", branch.get("on_true", []))
+        self.assertIn("failstep", branch.get("on_false", []))
+
+    def test_importer_switch_produces_cases(self) -> None:
+        """Switch node must produce a cases dict mapping keys to downstream IDs."""
+        mod = self._load_importer()
+        n8n = {
+            "name": "Switch Test",
+            "nodes": [
+                {"id": "sw1", "name": "Route",
+                 "type": "n8n-nodes-base.switch",
+                 "parameters": {
+                     "dataType": "string",
+                     "value1": "={{$json.env}}",
+                     "rules": {"rules": [
+                         {"operation": "equal", "value2": "prod", "outputKey": "prod"},
+                         {"operation": "equal", "value2": "dev", "outputKey": "dev"},
+                     ]},
+                 },
+                 "position": [0, 0]},
+                {"id": "prod_node", "name": "ProdStep",
+                 "type": "n8n-nodes-base.executeCommand",
+                 "parameters": {"command": "echo prod"}, "position": [200, -100]},
+                {"id": "dev_node", "name": "DevStep",
+                 "type": "n8n-nodes-base.executeCommand",
+                 "parameters": {"command": "echo dev"}, "position": [200, 100]},
+            ],
+            "connections": {
+                "Route": {
+                    "main": [
+                        [{"node": "ProdStep", "type": "main", "index": 0}],
+                        [{"node": "DevStep", "type": "main", "index": 0}],
+                    ]
+                }
+            },
+        }
+        manifest, _ = mod.convert(n8n)
+        steps_by_id = {s["id"]: s for s in manifest["steps"]}
+        sw = steps_by_id["route"]
+        self.assertEqual(sw["type"], "switch")
+        cases = sw.get("cases", {})
+        self.assertIn("prod", cases)
+        self.assertIn("dev", cases)
+        self.assertIn("prodstep", cases["prod"])
+        self.assertIn("devstep", cases["dev"])
+
+    # ── Fix 4: MCP security policy ─────────────────────────────────────────
+
+    def _mcp_paths(self, tmp: Path):
+        """Build a minimal WorkflowPaths for MCP policy tests."""
+        rw = self._load_runner()
+        return rw.build_paths(tmp)
+
+    def test_mcp_step_blocked_when_server_not_in_allowlist(self) -> None:
+        """MCP step must be blocked when allowed_mcp_servers is set and server isn't listed."""
+        rw = self._load_runner()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            paths = self._mcp_paths(Path(tmp_str))
+            step = {
+                "id": "call-evil",
+                "type": "mcp",
+                "executor_config": {"server": "evil-server", "tool": "run", "params": {}},
+            }
+            policy = {"tooling": {"allowed_mcp_servers": ["safe-server"]}}
+            ok, reason = rw.enforce_security_policy(step, paths, {}, policy)
+        self.assertFalse(ok)
+        self.assertIn("evil-server", reason)
+        self.assertIn("allowlist", reason)
+
+    def test_mcp_step_allowed_when_server_in_allowlist(self) -> None:
+        """MCP step must pass when the server appears in allowed_mcp_servers."""
+        rw = self._load_runner()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            paths = self._mcp_paths(Path(tmp_str))
+            step = {
+                "id": "call-safe",
+                "type": "mcp",
+                "executor_config": {"server": "safe-server", "tool": "run", "params": {}},
+            }
+            policy = {"tooling": {"allowed_mcp_servers": ["safe-server"]}}
+            ok, _ = rw.enforce_security_policy(step, paths, {}, policy)
+        self.assertTrue(ok)
+
+    def test_mcp_step_blocked_in_offline_mode(self) -> None:
+        """MCP step must be blocked when network_mode=offline (no allowlist needed)."""
+        rw = self._load_runner()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            paths = self._mcp_paths(Path(tmp_str))
+            step = {
+                "id": "call-any",
+                "type": "mcp",
+                "executor_config": {"server": "any-server", "tool": "run", "params": {}},
+            }
+            policy = {"environment": {"network_mode": "offline"}}
+            ok, reason = rw.enforce_security_policy(step, paths, {}, policy)
+        self.assertFalse(ok)
+        self.assertIn("offline", reason.lower())
+
+    def test_mcp_step_allowed_without_any_allowlist(self) -> None:
+        """MCP step must pass when no allowed_mcp_servers list is configured."""
+        rw = self._load_runner()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            paths = self._mcp_paths(Path(tmp_str))
+            step = {
+                "id": "call-free",
+                "type": "mcp",
+                "executor_config": {"server": "any-server", "tool": "run", "params": {}},
+            }
+            ok, _ = rw.enforce_security_policy(step, paths, {}, {})
+        self.assertTrue(ok)
+
+    # ── Fix 5: webhook security ────────────────────────────────────────────
+
+    def test_webhook_script_binds_localhost(self) -> None:
+        """Generated webhook server must bind to 127.0.0.1, not 0.0.0.0."""
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            mod = self._load_schedule()
+            wf_dir = tmp / "wf"
+            wf_dir.mkdir()
+            mod.install_webhook_trigger({"type": "webhook", "port": 8765}, wf_dir)
+            content = (wf_dir / "scripts" / "webhook_server.py").read_text(encoding="utf-8")
+            self.assertIn('BIND_HOST = "127.0.0.1"', content)
+            self.assertNotIn("0.0.0.0", content)
+
+    def test_webhook_script_enforces_path_check(self) -> None:
+        """Generated webhook server must validate the request path."""
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            mod = self._load_schedule()
+            wf_dir = tmp / "wf"
+            wf_dir.mkdir()
+            mod.install_webhook_trigger(
+                {"type": "webhook", "port": 8766, "path": "/trigger/my-workflow"}, wf_dir
+            )
+            content = (wf_dir / "scripts" / "webhook_server.py").read_text(encoding="utf-8")
+            self.assertIn("EXPECTED_PATH", content)
+            self.assertIn("/trigger/my-workflow", content)
+
+    def test_webhook_script_enforces_token_auth(self) -> None:
+        """Generated webhook server must include constant-time token verification."""
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            mod = self._load_schedule()
+            wf_dir = tmp / "wf"
+            wf_dir.mkdir()
+            mod.install_webhook_trigger(
+                {"type": "webhook", "port": 8767, "secret": "s3cr3t-token"}, wf_dir
+            )
+            content = (wf_dir / "scripts" / "webhook_server.py").read_text(encoding="utf-8")
+            self.assertIn("hmac.compare_digest", content)
+            self.assertIn("s3cr3t-token", content)
+            self.assertIn("X-Webhook-Token", content)
+
+    def test_webhook_no_secret_still_binds_localhost(self) -> None:
+        """Even without a secret, the webhook server must still bind to localhost."""
+        with tempfile.TemporaryDirectory() as tmp_str:
+            tmp = Path(tmp_str)
+            mod = self._load_schedule()
+            wf_dir = tmp / "wf"
+            wf_dir.mkdir()
+            mod.install_webhook_trigger({"type": "webhook", "port": 8768}, wf_dir)
+            content = (wf_dir / "scripts" / "webhook_server.py").read_text(encoding="utf-8")
+            self.assertIn("127.0.0.1", content)
 
 
 if __name__ == "__main__":

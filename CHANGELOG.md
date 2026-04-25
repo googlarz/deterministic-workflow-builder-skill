@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.6.0
+Five security fixes from adversarial code review:
+- **MCP policy bypass** — `enforce_security_policy()` now fully evaluates MCP steps: validates the server name against an optional `allowed_mcp_servers` allowlist in the policy pack, and blocks all MCP steps when `network_mode: offline`.
+- **Webhook security** — Generated `webhook_server.py` now binds to `127.0.0.1` only (not `0.0.0.0`), validates the request path against a configurable `EXPECTED_PATH`, and enforces constant-time token auth via `hmac.compare_digest`. `install_webhook_trigger()` accepts `path` and `secret` from the trigger dict and forwards them to the template.
+- **Dependency field** — Importer wrote `step["needs"]` but the scheduler reads `step.get("depends_on", [])`. Fixed to write `depends_on`; existing test updated accordingly.
+- **Branch/switch contracts** — `type: "branch"` steps now include `condition`, `on_true`, and `on_false` derived from n8n connection output indices (output[0]=true, output[1]=false). `type: "switch"` steps include a `cases` dict keyed by `outputKey`, each mapping to downstream step IDs.
+- **Mutation envelope** — Mutation proposal files are now written and read as `{"mutations": [...]}` to match the envelope format that `run_workflow.py` expects; backward-compatible reader accepts both formats.
+- 12 new tests; 78/78 pass.
+
 ## 1.5.0
 - `type: "browser"` — Chrome MCP-backed browser automation step. Claude navigates, clicks, fills forms, reads page content, inspects network, and captures results — all driven by a natural language `instruction` field with full artifact template expansion. No API required.
 - `type: "computer-use"` — Desktop automation step via computer-use MCP. Claude controls any native app via screenshots, mouse, keyboard, and scroll. Automates workflows that have no API and no browser interface.

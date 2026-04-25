@@ -1256,6 +1256,24 @@ def enforce_security_policy(
         ):
             return False, f"Working directory not allowed by policy: {working_directory}"
     if step["type"] == "mcp":
+        # Enforce network policy: MCP steps that use remote SSE URLs are network calls
+        network_mode = policy.get("environment", {}).get(
+            "network_mode", manifest.get("environment", {}).get("network_mode", "inherit")
+        )
+        executor_config = step.get("executor_config", {})
+        server_name = executor_config.get("server", "")
+        # Validate server is in an explicit allowlist if one is configured
+        allowed_mcp_servers = policy.get("tooling", {}).get("allowed_mcp_servers")
+        if isinstance(allowed_mcp_servers, list) and allowed_mcp_servers:
+            if server_name not in allowed_mcp_servers:
+                return (
+                    False,
+                    f"MCP server '{server_name}' not in policy allowed_mcp_servers allowlist.",
+                )
+        # Block MCP steps that would make network calls under offline policy
+        # (We can't know without the registry config, so we conservatively block all MCP in offline mode)
+        if network_mode == "offline":
+            return False, "Offline policy blocks MCP steps (may involve network I/O)."
         return True, "ok"
     if step["type"] in {"shell", "test", "transform", "publish", "sidecar-consume", "approval"}:
         script_path = resolve_safe_path(paths.workflow_dir, step["script"])

@@ -131,9 +131,21 @@ def _map_merge_node(node: dict, step: dict) -> None:
     )
 
 
-def _map_branch_node(node: dict, step: dict) -> None:
-    """Emit a shell condition script path; leave condition construction for the stub."""
-    step["script"] = f"steps/{step['id']}-condition.sh"
+def _map_branch_node(node: dict, step: dict, connections: dict, id_map: dict) -> None:
+    """Emit runtime-valid branch contract: condition script, on_true, on_false."""
+    cond_script = f"steps/{step['id']}-condition.sh"
+    step["condition"] = cond_script
+    step["script"] = cond_script  # kept for scaffold stub generation
+
+    # Resolve true/false downstream step IDs from n8n output indices
+    node_name = node.get("name", "")
+    outputs = connections.get(node_name, {}).get("main", [])
+    true_ids = [id_map[c["node"]] for c in (outputs[0] if len(outputs) > 0 else []) if c.get("node") in id_map]
+    false_ids = [id_map[c["node"]] for c in (outputs[1] if len(outputs) > 1 else []) if c.get("node") in id_map]
+    step["on_true"] = true_ids
+    step["on_false"] = false_ids
+
+    # Build condition expression comment for the stub
     params = node.get("parameters", {})
     conditions = params.get("conditions", {})
     parts: list[str] = []
@@ -152,14 +164,20 @@ def _map_branch_node(node: dict, step: dict) -> None:
     step["_condition_expr"] = " && ".join(parts) if parts else "true"
 
 
-def _map_switch_node(node: dict, step: dict) -> None:
+def _map_switch_node(node: dict, step: dict, connections: dict, id_map: dict) -> None:
+    """Emit runtime-valid switch contract: script + cases with downstream step lists."""
     step["script"] = f"steps/{step['id']}-switch.sh"
     params = node.get("parameters", {})
     rules = params.get("rules", {}).get("rules", [])
-    cases: dict[str, list] = {}
+
+    node_name = node.get("name", "")
+    outputs = connections.get(node_name, {}).get("main", [])
+
+    cases: dict[str, list[str]] = {}
     for i, rule in enumerate(rules):
         key = rule.get("outputKey", str(i))
-        cases[key] = []
+        out_ids = [id_map[c["node"]] for c in (outputs[i] if i < len(outputs) else []) if c.get("node") in id_map]
+        cases[key] = out_ids
     if cases:
         step["cases"] = cases
 
@@ -387,7 +405,7 @@ def convert(n8n_export: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
         }
         needs = deps.get(final_id, [])
         if needs:
-            step["needs"] = needs
+            step["depends_on"] = needs
 
         if ntype == "n8n-nodes-base.httpRequest":
             _map_http_node(node, step)
@@ -396,9 +414,9 @@ def convert(n8n_export: dict[str, Any]) -> tuple[dict[str, Any], list[dict]]:
         elif ntype == "n8n-nodes-base.merge":
             _map_merge_node(node, step)
         elif ntype == "n8n-nodes-base.if":
-            _map_branch_node(node, step)
+            _map_branch_node(node, step, connections, id_map)
         elif ntype == "n8n-nodes-base.switch":
-            _map_switch_node(node, step)
+            _map_switch_node(node, step, connections, id_map)
         elif "langchain" in ntype:
             _map_langchain_node(node, step)
         elif ntype == "n8n-nodes-base.code":
@@ -466,11 +484,15 @@ def scaffold(manifest: dict[str, Any], proposals: list[dict], output_dir: Path) 
         existing: list[dict] = []
         if mutations_path.exists():
             try:
-                existing = json.loads(mutations_path.read_text(encoding="utf-8"))
+                data = json.loads(mutations_path.read_text(encoding="utf-8"))
+                # Support both legacy bare-list format and canonical {"mutations": [...]} envelope
+                existing = data.get("mutations", data) if isinstance(data, dict) else data
             except (json.JSONDecodeError, OSError):
                 pass
         existing.extend(proposals)
-        mutations_path.write_text(json.dumps(existing, indent=2) + "\n", encoding="utf-8")
+        mutations_path.write_text(
+            json.dumps({"mutations": existing}, indent=2) + "\n", encoding="utf-8"
+        )
 
 
 def main(argv: list[str]) -> int:

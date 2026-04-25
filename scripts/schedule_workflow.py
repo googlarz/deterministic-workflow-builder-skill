@@ -41,6 +41,8 @@ _WEBHOOK_SERVER_TEMPLATE = """\
 #!/usr/bin/env python3
 \"\"\"Minimal webhook trigger server for a deterministic workflow.\"\"\"
 from __future__ import annotations
+import hashlib
+import hmac
 import http.server
 import subprocess
 import sys
@@ -49,10 +51,26 @@ from pathlib import Path
 RUNNER = {runner!r}
 WORKFLOW_DIR = {workflow_dir!r}
 PORT = {port}
+EXPECTED_PATH = {path!r}
+SECRET_TOKEN = {secret!r}  # empty string = no auth required
+BIND_HOST = "127.0.0.1"  # localhost only — expose via reverse proxy if needed
 
 
 class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):  # noqa: N802
+        # Path check
+        if self.path != EXPECTED_PATH:
+            self.send_response(404)
+            self.end_headers()
+            return
+        # Token auth (constant-time compare)
+        if SECRET_TOKEN:
+            auth = self.headers.get("X-Webhook-Token", "")
+            if not hmac.compare_digest(auth, SECRET_TOKEN):
+                self.send_response(401)
+                self.end_headers()
+                self.wfile.write(b"Unauthorized\\n")
+                return
         self.send_response(202)
         self.end_headers()
         self.wfile.write(b"Workflow triggered\\n")
@@ -67,8 +85,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
 
 if __name__ == "__main__":
-    print(f"Webhook server listening on port {{PORT}} for workflow {{WORKFLOW_DIR}}")
-    http.server.HTTPServer(("", PORT), Handler).serve_forever()
+    auth_note = f"token auth enabled" if SECRET_TOKEN else "WARNING: no token auth configured"
+    print(f"Webhook server on {{BIND_HOST}}:{{PORT}}{{EXPECTED_PATH}} ({{auth_note}})")
+    print(f"Workflow: {{WORKFLOW_DIR}}")
+    if SECRET_TOKEN:
+        print(f"Trigger: curl -X POST -H 'X-Webhook-Token: {{SECRET_TOKEN}}' http://{{BIND_HOST}}:{{PORT}}{{EXPECTED_PATH}}")
+    http.server.HTTPServer((BIND_HOST, PORT), Handler).serve_forever()
 """
 
 
@@ -149,6 +171,8 @@ def install_schedule_trigger(trigger: dict, workflow_dir: Path) -> int:
 
 def install_webhook_trigger(trigger: dict, workflow_dir: Path) -> int:
     port = trigger.get("port", 8080)
+    path = trigger.get("path", "/webhook")
+    secret = trigger.get("secret", "")
     server_script = workflow_dir / "scripts" / "webhook_server.py"
     server_script.parent.mkdir(parents=True, exist_ok=True)
     server_script.write_text(
@@ -156,14 +180,17 @@ def install_webhook_trigger(trigger: dict, workflow_dir: Path) -> int:
             runner=str(RUNNER_PATH),
             workflow_dir=str(workflow_dir),
             port=port,
+            path=path,
+            secret=secret,
         ),
         encoding="utf-8",
     )
     server_script.chmod(0o755)
     print(f"[triggers] Created webhook server: {server_script}")
-    print(f"  Port: {port}")
+    print(f"  Port: {port}  Path: {path}")
     print(f"  Start: python3 {server_script}")
-    print(f"  Trigger: curl -X POST http://localhost:{port}/")
+    auth_note = f" -H 'X-Webhook-Token: {secret}'" if secret else ""
+    print(f"  Trigger: curl -X POST{auth_note} http://localhost:{port}{path}")
     return 0
 
 
