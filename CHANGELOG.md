@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.7.0
+Two new capabilities: true parallel step execution with live streaming dashboard, and autonomous workflow self-improvement.
+
+**Parallel execution**
+- `max_parallel` is now readable from `manifest["graph"]` (not just the policy pack). Set `"graph": {"max_parallel": 4}` to run up to 4 independent steps concurrently. The ThreadPoolExecutor-based DAG scheduler was already in place — this unlocks it from workflow definitions.
+
+**Live streaming dashboard** (`scripts/live_dashboard.py`)
+- New `--live [PORT]` flag on `run_workflow.py` starts a local HTTP server (default port 7474) in a background thread alongside the workflow run.
+- Serves an SSE stream from the current run's `events.jsonl` (which already captured `step_started`, `step_completed`, `step_failed` events).
+- Browser page shows a real-time step grid: pending → running (pulsing) → complete/failed/skipped — no refresh needed. Zero external dependencies (SSE via stdlib `http.server`).
+- Also standalone: `python3 scripts/live_dashboard.py <workflow-dir> [--port N]`
+
+**Autonomous improvement loop**
+- New `scripts/mutation_classifier.py` — risk-scores mutation proposals as `low / medium / high` based on mutation type and which step fields are being changed. `remove_step` and `script` changes are high; `timeout_seconds`/`retry_limit` changes are low.
+- `run_improvement_cycle()` in `run_workflow.py` — auto-approves pending mutations that meet the configured risk threshold and prints a summary. Calls `analyze_run_history()` to surface unhealthy steps (>20% failure rate).
+- New `--improve` flag — runs the improvement cycle on demand. `--improve-max-risk low|medium|high` overrides the threshold.
+- Workflows opt in to post-run auto-improvement with `"auto_improve": {"enabled": true, "max_risk": "low"}` in `workflow.json`.
+
+21 new tests; 99/99 pass.
+
 ## 1.6.0
 Five security fixes from adversarial code review:
 - **MCP policy bypass** — `enforce_security_policy()` now fully evaluates MCP steps: validates the server name against an optional `allowed_mcp_servers` allowlist in the policy pack, and blocks all MCP steps when `network_mode: offline`.

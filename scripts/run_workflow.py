@@ -1006,6 +1006,69 @@ def reject_mutation(paths: WorkflowPaths, mut_id: str) -> int:
     return 0
 
 
+def run_improvement_cycle(
+    paths: WorkflowPaths,
+    manifest: dict[str, Any],
+    policy: dict[str, Any],
+    *,
+    max_risk: str = "low",
+    verbose: bool = True,
+) -> int:
+    """Auto-approve pending mutations that meet the risk threshold; print a summary.
+
+    Returns the count of mutations auto-approved.
+    """
+    try:
+        import importlib.util  # noqa: PLC0415
+        import sys  # noqa: PLC0415
+
+        spec = importlib.util.spec_from_file_location(
+            "mutation_classifier",
+            Path(__file__).parent / "mutation_classifier.py",
+        )
+        if spec is None or spec.loader is None:
+            raise ImportError("mutation_classifier not found")
+        mc = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mc)  # type: ignore[union-attr]
+    except Exception as exc:
+        print(f"[improve] Cannot load mutation_classifier: {exc}", file=sys.stderr)
+        return 0
+
+    data = read_json_file(paths.mutations_path, {"mutations": []})
+    mutations = data.get("mutations", [])
+    pending = [m for m in mutations if m.get("status") == "pending"]
+
+    history = mc.analyze_run_history(paths.audit_root)
+    summary = mc.improvement_summary(pending, history, max_risk=max_risk)
+
+    auto = summary["auto_approvable"]
+    needs = summary["needs_review"]
+    unhealthy = summary["unhealthy_steps"]
+
+    if verbose:
+        print(f"\n[improve] Pending mutations: {len(pending)}")
+        print(f"[improve] Auto-approvable (risk ≤ {max_risk}): {len(auto)}")
+        print(f"[improve] Needs human review: {len(needs)}")
+        if unhealthy:
+            print(f"[improve] Unhealthy steps (>20% failure rate): {', '.join(unhealthy)}")
+
+    approved = 0
+    for mut in auto:
+        rc = approve_mutation(paths, mut["id"])
+        if rc == 0:
+            approved += 1
+            if verbose:
+                risk = mc.classify_risk(mut)
+                print(f"[improve] ✓ auto-approved {mut['id']}  [{risk}]  {mut.get('description', '')[:60]}")
+
+    if approved and verbose:
+        print(f"[improve] Applied {approved} mutation(s). Re-run the workflow to use them.")
+    elif not pending and verbose:
+        print("[improve] No pending mutations.")
+
+    return approved
+
+
 _AUTO_HEAL_PROMPT_TEMPLATE = """\
 A step in a deterministic workflow failed. Propose a mutation to fix it.
 
@@ -2545,7 +2608,10 @@ def run_many(
     step_map = get_steps_by_id(manifest)
     step_state = read_tsv_state(paths.step_state_path)
     approval_state = read_tsv_state(paths.approval_state_path)
-    max_parallel = max(1, int(policy.get("execution", {}).get("max_parallel", 1)))
+    # Policy takes precedence over manifest; manifest graph takes precedence over the default of 1.
+    graph_parallel = manifest.get("graph", {}).get("max_parallel", 1)
+    policy_parallel = policy.get("execution", {}).get("max_parallel", graph_parallel)
+    max_parallel = max(1, int(policy_parallel))
 
     if dry_run:
         for step_id in order:
@@ -3146,6 +3212,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="Generate and open the run history dashboard.",
     )
+    parser.add_argument(
+        "--improve",
+        action="store_true",
+        help="Run the autonomous improvement cycle: score and auto-approve low-risk mutations.",
+    )
+    parser.add_argument(
+        "--improve-max-risk",
+        default=None,
+        choices=["low", "medium", "high"],
+        help="Maximum mutation risk level to auto-approve (default: from auto_improve config or 'low').",
+    )
+    parser.add_argument(
+        "--live",
+        metavar="PORT",
+        type=int,
+        nargs="?",
+        const=7474,
+        default=None,
+        help="Start the live dashboard server on PORT (default 7474) while running the workflow.",
+    )
     return parser.parse_args(argv)
 
 
@@ -3218,6 +3304,9 @@ def main(argv: list[str]) -> int:
             return install_triggers(manifest, paths)
         if args.dashboard:
             return generate_dashboard(paths)
+        if args.improve:
+            max_risk = args.improve_max_risk or manifest.get("auto_improve", {}).get("max_risk", "low")
+            return 0 if run_improvement_cycle(paths, manifest, policy, max_risk=max_risk) >= 0 else 1
         if args.step is not None:
             step = get_steps_by_id(manifest).get(args.step)
             if step is None:
@@ -3260,15 +3349,40 @@ def main(argv: list[str]) -> int:
             return run_many(
                 manifest, paths, policy, start_step=args.from_step, dry_run=args.dry_run
             )
+        # --live: start dashboard server in a daemon thread before running.
+        if args.live is not None and not args.dry_run:
+            import importlib.util as _ilu  # noqa: PLC0415
+            import threading as _threading  # noqa: PLC0415
+
+            _spec = _ilu.spec_from_file_location(
+                "live_dashboard", Path(__file__).parent / "live_dashboard.py"
+            )
+            if _spec and _spec.loader:
+                _ld = _ilu.module_from_spec(_spec)
+                _spec.loader.exec_module(_ld)  # type: ignore[union-attr]
+                _t = _threading.Thread(
+                    target=_ld.serve_live, args=(workflow_dir, args.live), daemon=True
+                )
+                _t.start()
+
+        def _run_and_improve(start_step=None, dry_run_flag=False):
+            rc = run_many(manifest, paths, policy, start_step=start_step, dry_run=dry_run_flag)
+            # Post-run autonomous improvement cycle.
+            ai_cfg = manifest.get("auto_improve", {})
+            if ai_cfg.get("enabled") and not dry_run_flag:
+                max_risk = args.improve_max_risk or ai_cfg.get("max_risk", "low")
+                run_improvement_cycle(paths, manifest, policy, max_risk=max_risk)
+            return rc
+
         if args.resume:
             start_step = first_incomplete_step(manifest, paths)
             if start_step is None:
                 print("All steps are already complete.")
                 return 0
-            return run_many(manifest, paths, policy, start_step=start_step, dry_run=args.dry_run)
+            return _run_and_improve(start_step=start_step, dry_run_flag=args.dry_run)
         if args.dry_run:
             return run_many(manifest, paths, policy, dry_run=True)
-        return run_many(manifest, paths, policy)
+        return _run_and_improve()
 
 
 if __name__ == "__main__":

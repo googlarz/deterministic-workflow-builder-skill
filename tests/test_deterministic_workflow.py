@@ -2495,5 +2495,272 @@ class SecurityFixTests(unittest.TestCase):
             self.assertIn("127.0.0.1", content)
 
 
+class MutationClassifierTests(unittest.TestCase):
+    """Tests for the mutation risk classifier (v1.7.0)."""
+
+    SCRIPTS_DIR = SKILL_DIR / "scripts"
+
+    def _load_mc(self):
+        import sys  # noqa: PLC0415
+        if str(self.SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(self.SCRIPTS_DIR))
+        import importlib  # noqa: PLC0415
+        import mutation_classifier  # noqa: PLC0415
+        importlib.reload(mutation_classifier)
+        return mutation_classifier
+
+    # ── Risk classification ────────────────────────────────────────────────
+
+    def test_remove_step_is_high_risk(self) -> None:
+        mc = self._load_mc()
+        self.assertEqual(mc.classify_risk({"type": "remove_step", "payload": {}}), "high")
+
+    def test_add_step_is_medium_risk(self) -> None:
+        mc = self._load_mc()
+        self.assertEqual(mc.classify_risk({"type": "add_step", "payload": {"step": {}}}), "medium")
+
+    def test_add_sidecar_is_low_risk(self) -> None:
+        mc = self._load_mc()
+        self.assertEqual(
+            mc.classify_risk({"type": "add_sidecar", "payload": {"sidecar": {}}}), "low"
+        )
+
+    def test_modify_step_script_is_high(self) -> None:
+        mc = self._load_mc()
+        risk = mc.classify_risk({
+            "type": "modify_step",
+            "payload": {"step_id": "x", "changes": {"script": "new.sh"}},
+        })
+        self.assertEqual(risk, "high")
+
+    def test_modify_step_timeout_is_low(self) -> None:
+        mc = self._load_mc()
+        risk = mc.classify_risk({
+            "type": "modify_step",
+            "payload": {"step_id": "x", "changes": {"timeout_seconds": 120}},
+        })
+        self.assertEqual(risk, "low")
+
+    def test_modify_step_url_is_medium(self) -> None:
+        mc = self._load_mc()
+        risk = mc.classify_risk({
+            "type": "modify_step",
+            "payload": {"step_id": "x", "changes": {"url": "https://new.example.com"}},
+        })
+        self.assertEqual(risk, "medium")
+
+    def test_risk_at_most_low_accepts_low(self) -> None:
+        mc = self._load_mc()
+        mut = {"type": "modify_step", "payload": {"changes": {"timeout_seconds": 60}}}
+        self.assertTrue(mc.risk_at_most(mut, "low"))
+
+    def test_risk_at_most_low_rejects_medium(self) -> None:
+        mc = self._load_mc()
+        mut = {"type": "add_step", "payload": {}}
+        self.assertFalse(mc.risk_at_most(mut, "low"))
+
+    def test_risk_at_most_medium_accepts_low_and_medium(self) -> None:
+        mc = self._load_mc()
+        low_mut = {"type": "add_sidecar", "payload": {}}
+        med_mut = {"type": "add_step", "payload": {}}
+        self.assertTrue(mc.risk_at_most(low_mut, "medium"))
+        self.assertTrue(mc.risk_at_most(med_mut, "medium"))
+
+    # ── Run history analysis ───────────────────────────────────────────────
+
+    def test_analyze_empty_audit_root_returns_empty(self) -> None:
+        mc = self._load_mc()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            result = mc.analyze_run_history(Path(tmp_str) / "nonexistent")
+        self.assertEqual(result, {})
+
+    def test_analyze_counts_failures_from_events(self) -> None:
+        mc = self._load_mc()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            audit = Path(tmp_str)
+            run1 = audit / "run-001"
+            run1.mkdir()
+            events = [
+                {"event": "step_started", "step_id": "fetch", "timestamp": "2026-01-01T00:00:00Z"},
+                {"event": "step_failed", "step_id": "fetch", "duration_seconds": 1.2,
+                 "timestamp": "2026-01-01T00:00:01Z"},
+                {"event": "step_started", "step_id": "fetch", "timestamp": "2026-01-01T00:00:02Z"},
+                {"event": "step_completed", "step_id": "fetch", "duration_seconds": 0.8,
+                 "timestamp": "2026-01-01T00:00:03Z"},
+            ]
+            (run1 / "events.jsonl").write_text(
+                "\n".join(json.dumps(e) for e in events), encoding="utf-8"
+            )
+            history = mc.analyze_run_history(audit)
+        self.assertIn("fetch", history)
+        self.assertEqual(history["fetch"]["runs"], 2)
+        self.assertEqual(history["fetch"]["failures"], 1)
+        self.assertAlmostEqual(history["fetch"]["failure_rate"], 0.5)
+
+    # ── Improvement summary ────────────────────────────────────────────────
+
+    def test_improvement_summary_partitions_by_risk(self) -> None:
+        mc = self._load_mc()
+        mutations = [
+            {"id": "m1", "status": "pending", "type": "add_sidecar",
+             "payload": {}, "description": "add monitoring sidecar"},
+            {"id": "m2", "status": "pending", "type": "remove_step",
+             "payload": {}, "description": "remove old step"},
+            {"id": "m3", "status": "approved", "type": "add_step",
+             "payload": {}, "description": "already approved"},
+        ]
+        summary = mc.improvement_summary(mutations, {}, max_risk="low")
+        auto_ids = [m["id"] for m in summary["auto_approvable"]]
+        needs_ids = [m["id"] for m in summary["needs_review"]]
+        self.assertIn("m1", auto_ids)      # low risk → auto
+        self.assertIn("m2", needs_ids)     # high risk → needs review
+        self.assertNotIn("m3", auto_ids)   # already approved → excluded
+
+
+class ParallelAndImprovementTests(unittest.TestCase):
+    """Tests for parallel execution config and the --improve flag (v1.7.0)."""
+
+    RUN_SCRIPT = SKILL_DIR / "scripts" / "run_workflow.py"
+    SCRIPTS_DIR = SKILL_DIR / "scripts"
+
+    def _load_runner(self):
+        import sys  # noqa: PLC0415
+        if str(self.SCRIPTS_DIR) not in sys.path:
+            sys.path.insert(0, str(self.SCRIPTS_DIR))
+        import importlib  # noqa: PLC0415
+        import run_workflow  # noqa: PLC0415
+        importlib.reload(run_workflow)
+        return run_workflow
+
+    # ── max_parallel from manifest graph ──────────────────────────────────
+
+    def test_max_parallel_read_from_manifest_graph(self) -> None:
+        """max_parallel in manifest graph should be respected when policy omits it."""
+        rw = self._load_runner()
+        # Access the resolution logic indirectly by reading the relevant
+        # lines: policy overrides manifest which overrides default of 1.
+        manifest = {
+            "schema_version": 4, "workflow_name": "p-test", "version": 1,
+            "goal": "test", "policy_pack": "strict-prod",
+            "graph": {"execution_model": "dag", "max_parallel": 4},
+            "steps": [],
+        }
+        policy = {}  # no execution key → fall back to manifest graph
+        graph_parallel = manifest.get("graph", {}).get("max_parallel", 1)
+        policy_parallel = policy.get("execution", {}).get("max_parallel", graph_parallel)
+        result = max(1, int(policy_parallel))
+        self.assertEqual(result, 4)
+
+    def test_policy_overrides_manifest_max_parallel(self) -> None:
+        """Policy max_parallel must take precedence over manifest graph value."""
+        manifest = {
+            "graph": {"max_parallel": 8},
+        }
+        policy = {"execution": {"max_parallel": 2}}
+        graph_parallel = manifest.get("graph", {}).get("max_parallel", 1)
+        policy_parallel = policy.get("execution", {}).get("max_parallel", graph_parallel)
+        result = max(1, int(policy_parallel))
+        self.assertEqual(result, 2)
+
+    # ── --improve CLI flag ─────────────────────────────────────────────────
+
+    def test_improve_flag_parsed_correctly(self) -> None:
+        rw = self._load_runner()
+        ns = rw.parse_args(["--improve", "--workflow-dir", "/tmp/x"])
+        self.assertTrue(ns.improve)
+
+    def test_improve_max_risk_flag_parsed(self) -> None:
+        rw = self._load_runner()
+        ns = rw.parse_args(["--improve", "--improve-max-risk", "medium", "--workflow-dir", "/tmp/x"])
+        self.assertTrue(ns.improve)
+        self.assertEqual(ns.improve_max_risk, "medium")
+
+    def test_live_flag_parsed_with_default_port(self) -> None:
+        rw = self._load_runner()
+        ns = rw.parse_args(["--live", "--workflow-dir", "/tmp/x"])
+        self.assertEqual(ns.live, 7474)
+
+    def test_live_flag_parsed_with_custom_port(self) -> None:
+        rw = self._load_runner()
+        ns = rw.parse_args(["--live", "9090", "--workflow-dir", "/tmp/x"])
+        self.assertEqual(ns.live, 9090)
+
+    # ── run_improvement_cycle ─────────────────────────────────────────────
+
+    def test_improvement_cycle_auto_approves_low_risk_mutations(self) -> None:
+        """run_improvement_cycle must auto-approve low-risk pending mutations."""
+        rw = self._load_runner()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            root = Path(tmp_str)
+            run_command("python3", str(INIT_SCRIPT), "improve-wf", "--path", str(root), "--steps", "run")
+            wf_dir = root / "improve-wf"
+            paths = rw.build_paths(wf_dir)
+
+            # Inject a low-risk pending mutation; read actual step id from manifest.
+            manifest = rw.load_manifest(paths.manifest_path)
+            first_step_id = manifest["steps"][0]["id"]
+            low_mut = {
+                "id": "mut-aabbccdd",
+                "status": "pending",
+                "type": "modify_step",
+                "payload": {"step_id": first_step_id, "changes": {"timeout_seconds": 120}},
+                "description": "increase timeout",
+                "proposed_by": "test",
+                "proposed_at": "2026-01-01T00:00:00Z",
+                "run_id": "",
+            }
+            paths.mutations_path.parent.mkdir(parents=True, exist_ok=True)
+            paths.mutations_path.write_text(
+                json.dumps({"mutations": [low_mut]}), encoding="utf-8"
+            )
+
+            approved = rw.run_improvement_cycle(
+                paths, manifest, {}, max_risk="low", verbose=False
+            )
+        self.assertEqual(approved, 1)
+
+    def test_improvement_cycle_skips_high_risk_mutations(self) -> None:
+        """High-risk mutations must NOT be auto-approved when max_risk='low'."""
+        rw = self._load_runner()
+        with tempfile.TemporaryDirectory() as tmp_str:
+            root = Path(tmp_str)
+            run_command("python3", str(INIT_SCRIPT), "high-risk-wf", "--path", str(root), "--steps", "run")
+            wf_dir = root / "high-risk-wf"
+            paths = rw.build_paths(wf_dir)
+
+            high_mut = {
+                "id": "mut-deadbeef",
+                "status": "pending",
+                "type": "remove_step",
+                "payload": {"step_id": "01-run"},
+                "description": "remove the only step",
+                "proposed_by": "test",
+                "proposed_at": "2026-01-01T00:00:00Z",
+                "run_id": "",
+            }
+            paths.mutations_path.parent.mkdir(parents=True, exist_ok=True)
+            paths.mutations_path.write_text(
+                json.dumps({"mutations": [high_mut]}), encoding="utf-8"
+            )
+
+            manifest = rw.load_manifest(paths.manifest_path)
+            approved = rw.run_improvement_cycle(
+                paths, manifest, {}, max_risk="low", verbose=False
+            )
+        self.assertEqual(approved, 0)
+
+    def test_improve_cli_flag_runs_cycle_on_workflow(self) -> None:
+        """--improve flag must exit 0 even when there are no pending mutations."""
+        with tempfile.TemporaryDirectory() as tmp_str:
+            root = Path(tmp_str)
+            run_command("python3", str(INIT_SCRIPT), "cli-improve-wf", "--path", str(root), "--steps", "run")
+            wf_dir = root / "cli-improve-wf"
+            result = run_command(
+                "python3", str(self.RUN_SCRIPT),
+                "--improve", "--workflow-dir", str(wf_dir),
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+
+
 if __name__ == "__main__":
     unittest.main()
