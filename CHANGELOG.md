@@ -1,5 +1,14 @@
 # Changelog
 
+## 1.9.0
+First-run experience improvements.
+
+- **`examples/hello-world/`** — complete runnable two-step workflow: `greet` writes a greeting artifact, `verify` checks it. Real step scripts, rollback hooks, portable `run_workflow.sh` that finds the skill via `CODEX_HOME`, then by walking up the repo tree, with actionable error if neither works.
+- **README.md** — remove broken `docs/visualization-preview.png` image reference; add Prerequisites section (Python 3.9+, Bash, optional Claude CLI); rewrite Quick Start Option B to show exactly what to put in a step script and link to the example; clarify that `compile_workflow.py` requires Claude; add coverage badge.
+- **`init_deterministic_workflow.py`** — generated `run_workflow.sh` now uses `LOCAL_SKILL_HOME` (instead of `DEFAULT_SKILL_HOME`) and emits an actionable error with install/run hints instead of a bare message.
+- **`.gitignore`** — add `.coverage` and `htmlcov/`.
+- **`examples/.gitignore`** — exclude runtime artifacts (`artifacts/`, `logs/`, `audit/runs/`, `workflow-graph.html`, `.workflow.lock`) so examples stay clean in the repo.
+
 ## 1.8.0
 Coverage enforcement and tests for six previously untested scripts.
 
