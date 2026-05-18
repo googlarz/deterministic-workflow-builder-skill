@@ -197,13 +197,13 @@ python3 scripts/run_workflow.py ./demo-flow --dry-run
 python3 scripts/run_workflow.py ./demo-flow
 ```
 
-**Option C — compile from natural language (requires Claude CLI):**
+**Option C — compile from natural language:**
 
 ```bash
 python3 scripts/compile_workflow.py "Fix the failing CI test and make it deterministic." --path .
 ```
 
-This calls Claude to generate the full `workflow.json` and step scripts from the description.
+This uses local keyword analysis to generate a `workflow.json` and step scripts from the description. No Claude CLI required — `compile_workflow.py` is pure Python.
 
 ## Common Operations
 
